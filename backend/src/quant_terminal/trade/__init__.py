@@ -25,6 +25,7 @@ from .executor import (
     OrderStatus,
     Position
 )
+from .sanli_executor import SanliPaperExecutor, SanliPosition
 from .live_engine import LiveEngine, LiveConfig
 
 __all__ = [
@@ -34,6 +35,9 @@ __all__ = [
     "OKXExecutor",
     "QMTExecutor",
     "ThsTraderExecutor",
+    # 三立期货
+    "SanliPaperExecutor",
+    "SanliPosition",
     # 引擎
     "LiveEngine",
     "LiveConfig",

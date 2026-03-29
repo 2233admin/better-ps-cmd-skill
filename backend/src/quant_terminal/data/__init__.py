@@ -14,6 +14,7 @@ from .base import DataProvider, DataConfig
 from .stocks import StockDataProvider, load_stock_for_backtest
 from .futures import FuturesDataProvider, load_futures_for_backtest
 from .crypto import CryptoDataProvider, load_crypto_for_backtest
+from .sanli_futures import SanliFuturesProvider, load_sanli_for_backtest
 from .unified import UnifiedAssetLoader, load_asset
 
 __all__ = [
@@ -25,6 +26,9 @@ __all__ = [
     # 期货
     "FuturesDataProvider",
     "load_futures_for_backtest",
+    # 三立期货
+    "SanliFuturesProvider",
+    "load_sanli_for_backtest",
     # 加密货币
     "CryptoDataProvider",
     "load_crypto_for_backtest",
