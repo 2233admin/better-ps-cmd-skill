@@ -39,7 +39,9 @@ class FuturesDataProvider(DataProvider):
     def _ensure_cache_dir(self):
         """确保缓存目录存在"""
         if self.config.use_cache and self.config.cache_dir:
-            os.makedirs(self.config.cache_dir, exist_ok=True)
+            # 期货数据存储在 futures/ 子目录
+            futures_dir = os.path.join(self.config.cache_dir, 'futures')
+            os.makedirs(futures_dir, exist_ok=True)
 
     def fetch(
         self,
@@ -187,7 +189,7 @@ class FuturesDataProvider(DataProvider):
 
         if save_path is None:
             save_path = os.path.join(
-                self.config.cache_dir,
+                self.config.cache_dir, 'futures',
                 f"{code}_{timeframe}.parquet"
             )
 
@@ -199,7 +201,7 @@ class FuturesDataProvider(DataProvider):
     def load_from_cache(self, code: str, timeframe: str = "daily") -> pl.DataFrame:
         """从本地缓存加载数据"""
         cache_path = os.path.join(
-            self.config.cache_dir,
+            self.config.cache_dir, 'futures',
             f"{code}_{timeframe}.parquet"
         )
 
@@ -257,11 +259,11 @@ def load_futures_for_backtest(
         DataConfig(cache_dir=data_dir, use_cache=True)
     )
 
-    cache_path = os.path.join(data_dir, f"{code}_{timeframe}.parquet")
+    cache_path = os.path.join(data_dir, 'futures', f"{code}_{timeframe}.parquet")
 
     if os.path.exists(cache_path):
         return provider.load_from_cache(code, timeframe)
     else:
         print(f"[load_futures_for_backtest] 缓存不存在，尝试下载 {code} 数据...")
-        provider.fetch_and_save(code, timeframe, save_path=cache_path)
+        provider.fetch_and_save(code, timeframe)
         return provider.load_from_cache(code, timeframe)
