@@ -26,6 +26,7 @@ from .executor import (
     Position
 )
 from .sanli_executor import SanliPaperExecutor, SanliPosition
+from .wenhua_executor import WenhuaExecutor, WenhuaPosition
 from .live_engine import LiveEngine, LiveConfig
 
 __all__ = [
@@ -38,6 +39,9 @@ __all__ = [
     # 三立期货
     "SanliPaperExecutor",
     "SanliPosition",
+    # 文华期货
+    "WenhuaExecutor",
+    "WenhuaPosition",
     # 引擎
     "LiveEngine",
     "LiveConfig",

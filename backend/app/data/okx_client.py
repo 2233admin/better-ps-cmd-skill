@@ -194,8 +194,8 @@ def get_okx_client() -> OKXClient:
     global _client
     if _client is None:
         _client = OKXClient(
-            api_key="8c6af951-2b5c-4542-bff2-cdd194aba922",
-            secret_key="B01F44AC6EB811F7F97B91B45E2A1351",
+            api_key="d6875510-5965-4ad2-8820-49ebf5ab2085",
+            secret_key="E7172B6326FD0DBCBBA1D5E2B0E0A446",
             passphrase="Xyt456321..",
         )
     return _client

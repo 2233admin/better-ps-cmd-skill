@@ -169,4 +169,10 @@ def get_feed_manager() -> DataFeedManager:
             _manager.register(SinaFeed())
         except Exception as e:
             logger.warning(f"HTTP feed init failed: {e}")
+        # 期货数据源 (优先级4)
+        try:
+            from .futures_feed import FuturesFeed
+            _manager.register(FuturesFeed())
+        except Exception as e:
+            logger.warning(f"FuturesFeed init failed: {e}")
     return _manager

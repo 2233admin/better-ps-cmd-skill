@@ -108,6 +108,11 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 ignore_missing_imports = true
+# Phase 3: 增量缓存优化
+incremental = true
+cache_dir = ".mypy_cache"
+sqlite_cache = true
+cache_fine_grained = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"

@@ -1,0 +1,95 @@
+[
+  {
+    "pair": "ETH-USDT",
+    "backtest": {
+      "pair": "ETH-USDT",
+      "sharpe": 0.57,
+      "return": 5.73,
+      "mdd": 15.64,
+      "trend": "UP",
+      "last_price": 2216.39
+    },
+    "histmat": {
+      "pair": "ETH-USDT",
+      "p_risk_current": 0.30726806850700156,
+      "p_risk_mean": 0.5569318402957998,
+      "p_risk_max": 0.8348815524518932,
+      "p_risk_min": 0.26994925242447076,
+      "crisis_signals": 48,
+      "stable_signals": 26
+    },
+    "sentiment": {
+      "pair": "ETH-USDT",
+      "sentiment_score": 0.65,
+      "news_count": 42,
+      "positive_ratio": 0.68,
+      "fear_greed_index": 55,
+      "social_volume": 8500,
+      "source": "simulated"
+    },
+    "综合得分": 0.517,
+    "建议": "中性观望"
+  },
+  {
+    "pair": "BTC-USDT",
+    "backtest": {
+      "pair": "BTC-USDT",
+      "sharpe": 0.1,
+      "return": 0.22,
+      "mdd": 11.84,
+      "trend": "UP",
+      "last_price": 71372.5
+    },
+    "histmat": {
+      "pair": "BTC-USDT",
+      "p_risk_current": 0.259722967049974,
+      "p_risk_mean": 0.5767460861683514,
+      "p_risk_max": 0.7863756393560442,
+      "p_risk_min": 0.22818319951199453,
+      "crisis_signals": 58,
+      "stable_signals": 25
+    },
+    "sentiment": {
+      "pair": "BTC-USDT",
+      "sentiment_score": 0.65,
+      "news_count": 42,
+      "positive_ratio": 0.68,
+      "fear_greed_index": 55,
+      "social_volume": 8500,
+      "source": "simulated"
+    },
+    "综合得分": 0.437,
+    "建议": "中性观望"
+  },
+  {
+    "pair": "SOL-USDT",
+    "backtest": {
+      "pair": "SOL-USDT",
+      "sharpe": -0.34,
+      "return": -5.28,
+      "mdd": 18.58,
+      "trend": "UP",
+      "last_price": 83.39
+    },
+    "histmat": {
+      "pair": "SOL-USDT",
+      "p_risk_current": 0.31774825131980444,
+      "p_risk_mean": 0.6884317783925978,
+      "p_risk_max": 0.8492897512012948,
+      "p_risk_min": 0.31201518207025525,
+      "crisis_signals": 77,
+      "stable_signals": 7
+    },
+    "sentiment": {
+      "pair": "SOL-USDT",
+      "sentiment_score": 0.65,
+      "news_count": 42,
+      "positive_ratio": 0.68,
+      "fear_greed_index": 55,
+      "social_volume": 8500,
+      "source": "simulated"
+    },
+    "综合得分": 0.4,
+    "建议": "观望/做空"
+  }
+]

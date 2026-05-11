@@ -1,0 +1,17 @@
+{
+  "code": "IF0",
+  "timeframe": "1m",
+  "lookback": 20,
+  "initial_capital": 500000,
+  "total_return": 0.23859498087895917,
+  "max_drawdown": 0.10003800328167489,
+  "sharpe": 3.7599689776567358,
+  "trades_count": 1,
+  "buy_count": 1,
+  "sell_count": 0,
+  "commission": 119.61242754280528,
+  "final_value": 619297.4904394796,
+  "p_risk_mean": 0.05734291489616102,
+  "p_risk_max": 0.057593701510153306,
+  "p_risk_min": 0.05732441672107643
+}
