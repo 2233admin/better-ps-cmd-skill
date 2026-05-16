@@ -2,6 +2,18 @@
 
 A股日内 + 加密货币量化交易系统。
 
+## QMT Phase-1 Boundary
+
+`k-atana` 是研究、数据、因子、回测和终端骨架；EasyXT 只作为 QMT/xtquant 执行适配层。
+
+研究代码不得直接调用 QMT。标准链路是：
+
+```text
+k-atana trade intent -> EasyXT phase1 bridge -> sim journal / QMT adapter
+```
+
+详见：[Architecture Decision: QMT Phase-1 Boundary](docs/ARCHITECTURE_DECISION_QMT_PHASE1.md)
+
 ## 模块分类
 
 ### 📊 A股模块
