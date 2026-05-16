@@ -13,7 +13,8 @@ experimental material. They are not part of the default test gate.
 ```text
 backend/app/
   api/       HTTP API handlers.
-  data/      Market data adapters.
+  data/      Shared data adapters and compatibility wrappers.
+  markets/   Market-owned implementations.
   macro/     Macro research services still used by the app.
   strategy/  Backtest, factors, and signal logic.
   trade/     Broker-neutral intent and bridge boundaries.
@@ -46,22 +47,25 @@ legacy/
 Crypto active surface:
 
 - `backend/run_okx_comprehensive.py`
-- `backend/app/data/crypto_market_data.py`
-- `backend/app/data/okx_client.py`
-- `backend/app/data/okx_feed.py`
+- `backend/app/markets/crypto/crypto_market_data.py`
+- `backend/app/markets/crypto/okx_client.py`
+- `backend/app/markets/crypto/okx_feed.py`
 - `backend/app/api/okx_api.py`
-- `backend/app/strategy/okx_t_runner.py`
+- `backend/app/markets/crypto/okx_t_runner.py`
 - `frontend/src/components/OkxTrading.tsx`
 
 A-share active surface:
 
-- `backend/app/data/akshare_feed.py`
-- `backend/app/data/tdx_parser.py`
-- `backend/app/data/tdx_realtime.py`
+- `backend/app/markets/ashare/akshare_feed.py`
+- `backend/app/markets/ashare/tdx_parser.py`
+- `backend/app/markets/ashare/tdx_realtime.py`
 - `backend/app/trade/qmt_bridge.py`
 - `backend/tests/integration/test_easyxt_bridge_contract.py`
 - External data lake: `/srv/lan-ai/data/ashare`
 - External checks: `/srv/lan-ai/artifacts/ashare-data-checks`
+
+Compatibility wrappers remain under `backend/app/data/` and
+`backend/app/strategy/` so older imports keep working during migration.
 
 Cold zone, not default scope:
 
