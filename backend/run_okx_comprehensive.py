@@ -14,7 +14,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -133,6 +133,23 @@ async def fetch_sentiment(pair: str) -> dict:
     }
 
 
+def _clip01(value: float) -> float:
+    return float(np.clip(value, 0.0, 1.0))
+
+
+def _score_from_signed(value: float, scale: float) -> float:
+    if scale <= 0:
+        return 0.5
+    return _clip01(0.5 + value / scale)
+
+
+def _series_returns(closes: np.ndarray) -> np.ndarray:
+    if len(closes) < 2:
+        return np.array([])
+    prev = np.maximum(closes[:-1], 1e-10)
+    return (closes[1:] - closes[:-1]) / prev
+
+
 def analyze_pair_histmat(pair: str, klines: pl.DataFrame) -> dict:
     """对单个交易对运行 hist-mat 分析"""
     engine = HistMatEngine(domain=DOMAIN_CRYPTO)
@@ -156,6 +173,191 @@ def analyze_pair_histmat(pair: str, klines: pl.DataFrame) -> dict:
         "p_risk_min": float(np.min(p_arr)),
         "crisis_signals": int(np.sum(p_arr > 0.65)),
         "stable_signals": int(np.sum(p_arr < 0.35)),
+    }
+
+
+def compute_price_volume_factor_groups(df: pl.DataFrame, pair: str) -> dict:
+    """Compute transparent price/volume factor groups from OHLCV bars."""
+    if df.height < 20:
+        neutral = {
+            "score": 0.5,
+            "direction": "neutral",
+            "confidence": 0.0,
+            "metrics": {"reason": "insufficient bars"},
+        }
+        return {
+            "trend": neutral,
+            "momentum": neutral,
+            "volatility": neutral,
+            "volume": neutral,
+            "mean_reversion": neutral,
+        }
+
+    closes = df["close"].to_numpy()
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    volumes = df["volume"].to_numpy()
+    returns = _series_returns(closes)
+
+    sma_20 = float(np.mean(closes[-20:]))
+    sma_50 = float(np.mean(closes[-50:])) if len(closes) >= 50 else sma_20
+    last_close = float(closes[-1])
+    trend_spread = (sma_20 - sma_50) / max(sma_50, 1e-10)
+    trend_score = _score_from_signed(trend_spread, 0.08)
+
+    ret_12 = (closes[-1] - closes[-13]) / max(closes[-13], 1e-10) if len(closes) >= 13 else 0.0
+    ret_24 = (closes[-1] - closes[-25]) / max(closes[-25], 1e-10) if len(closes) >= 25 else ret_12
+    momentum_score = _score_from_signed(0.6 * ret_12 + 0.4 * ret_24, 0.12)
+
+    vol_24 = float(np.std(returns[-24:])) if len(returns) >= 24 else float(np.std(returns))
+    vol_72 = float(np.std(returns[-72:])) if len(returns) >= 72 else max(vol_24, 1e-10)
+    vol_ratio = vol_24 / max(vol_72, 1e-10)
+    range_pct = (float(np.max(highs[-20:])) - float(np.min(lows[-20:]))) / max(last_close, 1e-10)
+    volatility_score = _clip01(1.0 - (vol_ratio - 0.8) / 1.8)
+
+    vol_mean_20 = float(np.mean(volumes[-20:]))
+    vol_mean_60 = float(np.mean(volumes[-60:])) if len(volumes) >= 60 else max(vol_mean_20, 1e-10)
+    volume_ratio = vol_mean_20 / max(vol_mean_60, 1e-10)
+    last_return = float(returns[-1]) if len(returns) else 0.0
+    volume_score = _clip01(0.5 + np.sign(last_return) * min(abs(volume_ratio - 1.0), 1.0) * 0.25)
+
+    rolling_mean = sma_20
+    rolling_std = float(np.std(closes[-20:]))
+    zscore = (last_close - rolling_mean) / max(rolling_std, 1e-10)
+    mean_reversion_score = _clip01(0.5 - zscore / 6.0)
+
+    return {
+        "trend": {
+            "score": round(trend_score, 4),
+            "direction": "bullish" if trend_score > 0.55 else "bearish" if trend_score < 0.45 else "neutral",
+            "confidence": round(min(abs(trend_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": {
+                "sma_20": round(sma_20, 6),
+                "sma_50": round(sma_50, 6),
+                "trend_spread_pct": round(trend_spread * 100.0, 4),
+            },
+        },
+        "momentum": {
+            "score": round(momentum_score, 4),
+            "direction": "bullish" if momentum_score > 0.55 else "bearish" if momentum_score < 0.45 else "neutral",
+            "confidence": round(min(abs(momentum_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": {
+                "return_12_bars_pct": round(ret_12 * 100.0, 4),
+                "return_24_bars_pct": round(ret_24 * 100.0, 4),
+            },
+        },
+        "volatility": {
+            "score": round(volatility_score, 4),
+            "direction": "risk_off" if volatility_score < 0.45 else "risk_on" if volatility_score > 0.55 else "neutral",
+            "confidence": round(min(abs(volatility_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": {
+                "vol_24": round(vol_24, 8),
+                "vol_72": round(vol_72, 8),
+                "vol_ratio": round(vol_ratio, 4),
+                "range_20_pct": round(range_pct * 100.0, 4),
+            },
+        },
+        "volume": {
+            "score": round(volume_score, 4),
+            "direction": "confirming_up" if volume_score > 0.55 else "confirming_down" if volume_score < 0.45 else "neutral",
+            "confidence": round(min(abs(volume_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": {
+                "volume_mean_20": round(vol_mean_20, 6),
+                "volume_mean_60": round(vol_mean_60, 6),
+                "volume_ratio": round(volume_ratio, 4),
+                "last_return_pct": round(last_return * 100.0, 4),
+            },
+        },
+        "mean_reversion": {
+            "score": round(mean_reversion_score, 4),
+            "direction": "oversold_bounce" if mean_reversion_score > 0.55 else "overbought_pullback" if mean_reversion_score < 0.45 else "neutral",
+            "confidence": round(min(abs(mean_reversion_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": {
+                "zscore_20": round(float(zscore), 4),
+                "last_close": round(last_close, 6),
+            },
+        },
+    }
+
+
+def build_factor_view(backtest: dict, histmat: dict, sentiment: dict, df: pl.DataFrame, pair: str) -> dict:
+    price_volume_groups = compute_price_volume_factor_groups(df, pair)
+    hmc_score = _clip01(1.0 - histmat["p_risk_current"])
+    sentiment_score = _clip01(float(sentiment.get("sentiment_score", 0.5)))
+    backtest_score = _clip01(float(backtest.get("sharpe", 0.0)) / 2.0)
+
+    factor_groups = {
+        **price_volume_groups,
+        "hmc": {
+            "score": round(hmc_score, 4),
+            "direction": "risk_off" if hmc_score < 0.45 else "risk_on" if hmc_score > 0.55 else "neutral",
+            "confidence": round(min(abs(hmc_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": histmat,
+        },
+        "sentiment": {
+            "score": round(sentiment_score, 4),
+            "direction": "positive" if sentiment_score > 0.55 else "negative" if sentiment_score < 0.45 else "neutral",
+            "confidence": round(min(abs(sentiment_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": sentiment,
+        },
+        "replay_quality": {
+            "score": round(backtest_score, 4),
+            "direction": "positive" if backtest_score > 0.55 else "negative" if backtest_score < 0.45 else "neutral",
+            "confidence": round(min(abs(backtest_score - 0.5) * 2.0, 1.0), 4),
+            "metrics": backtest,
+        },
+    }
+
+    weights = {
+        "trend": 0.18,
+        "momentum": 0.16,
+        "volatility": 0.12,
+        "volume": 0.10,
+        "mean_reversion": 0.10,
+        "hmc": 0.14,
+        "sentiment": 0.08,
+        "replay_quality": 0.12,
+    }
+
+    weighted_score = 0.0
+    group_scores = {}
+    for name, weight in weights.items():
+        score = float(factor_groups[name]["score"])
+        weighted_score += score * weight
+        group_scores[name] = {
+            "score": round(score, 4),
+            "weight": weight,
+            "contribution": round(score * weight, 4),
+        }
+
+    risk_flags = []
+    if histmat["p_risk_current"] > 0.70:
+        risk_flags.append("hmc_high_transition_risk")
+    if float(factor_groups["volatility"]["metrics"]["vol_ratio"]) > 1.8:
+        risk_flags.append("volatility_expansion")
+    if backtest.get("mdd", 0) > 20:
+        risk_flags.append("large_recent_drawdown")
+
+    if weighted_score > 0.65 and not risk_flags:
+        decision = "strong_long"
+        advice = "强烈做多"
+    elif weighted_score > 0.55 and histmat["p_risk_current"] < 0.65:
+        decision = "moderate_long"
+        advice = "适度做多"
+    elif weighted_score < 0.40 or histmat["p_risk_current"] > 0.70:
+        decision = "avoid_or_short"
+        advice = "观望/做空"
+    else:
+        decision = "neutral"
+        advice = "中性观望"
+
+    return {
+        "factor_groups": factor_groups,
+        "group_scores": group_scores,
+        "final_score": round(weighted_score, 4),
+        "decision": decision,
+        "advice": advice,
+        "risk_flags": risk_flags,
     }
 
 
@@ -231,27 +433,9 @@ async def comprehensive_analysis(pairs: list[str], limit: int = 200):
         # 4. 舆情分析
         sentiment = await fetch_sentiment(pair)
 
-        # 5. 综合评分
-        # Sharpe 权重 40%，P_risk 权重 30%，舆情权重 30%
-        sharpe_score = np.clip(backtest["sharpe"] / 2.0, 0, 1)  # 归一化到 0-1
-        prisk_score = 1.0 - histmat["p_risk_current"]  # P_risk 越低越好
-        sentiment_score = sentiment["sentiment_score"]
-
-        综合得分 = (
-            sharpe_score * 0.40 +
-            prisk_score * 0.30 +
-            sentiment_score * 0.30
-        )
-
-        # 6. 交易建议
-        if 综合得分 > 0.65 and histmat["p_risk_current"] < 0.50:
-            建议 = "强烈做多"
-        elif 综合得分 > 0.55 and histmat["p_risk_current"] < 0.60:
-            建议 = "适度做多"
-        elif 综合得分 < 0.40 or histmat["p_risk_current"] > 0.70:
-            建议 = "观望/做空"
-        else:
-            建议 = "中性观望"
+        factor_view = build_factor_view(backtest, histmat, sentiment, df, pair)
+        综合得分 = factor_view["final_score"]
+        建议 = factor_view["advice"]
 
         results.append({
             "pair": pair,
@@ -259,11 +443,16 @@ async def comprehensive_analysis(pairs: list[str], limit: int = 200):
             "backtest": backtest,
             "histmat": histmat,
             "sentiment": sentiment,
+            "factor_groups": factor_view["factor_groups"],
+            "group_scores": factor_view["group_scores"],
+            "final_score": factor_view["final_score"],
+            "decision": factor_view["decision"],
+            "risk_flags": factor_view["risk_flags"],
             "综合得分": round(综合得分, 3),
             "建议": 建议,
         })
 
-        logger.info(f"  Sharpe: {backtest['sharpe']:.2f} | P_risk: {histmat['p_risk_current']:.3f} | 舆情: {sentiment['sentiment_score']:.2f} | 综合: {综合得分:.3f} | {建议}")
+        logger.info(f"  source={market_data_source} | score={综合得分:.3f} | decision={factor_view['decision']} | {建议}")
 
     # 按综合得分排序
     results.sort(key=lambda x: x["综合得分"], reverse=True)
@@ -321,7 +510,7 @@ async def main():
 
     results = await comprehensive_analysis(pairs, args.limit)
     payload = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "provider": "katana",
         "exchange": "okx",
         "requested_pairs": pairs,
