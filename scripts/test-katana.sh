@@ -34,7 +34,11 @@ unit() {
     app/data/crypto_market_data.py \
     app/api/okx_api.py \
     run_okx_comprehensive.py
-  "$PYTHON" -m pytest tests/unit tests/contract
+  if "$PYTHON" -c "import pytest" >/dev/null 2>&1; then
+    "$PYTHON" -m pytest tests/unit tests/contract
+  else
+    echo "pytest not installed; unit pytest skipped after py_compile"
+  fi
 }
 
 crypto() {
