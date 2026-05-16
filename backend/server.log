@@ -1,0 +1,24 @@
+INFO:     Started server process [35028]
+INFO:     Waiting for application startup.
+[32m2026-03-28 22:21:46.567[0m | [1mINFO    [0m | [36mapp.main[0m:[36mlifespan[0m:[36m90[0m - [1m=== A股日内量化交易终端 启动 ===[0m
+[32m2026-03-28 22:21:46.578[0m | [1mINFO    [0m | [36mapp.data.store[0m:[36m_init_tables[0m:[36m151[0m - [1mDuckDB tables initialized[0m
+[32m2026-03-28 22:21:46.578[0m | [1mINFO    [0m | [36mapp.main[0m:[36mlifespan[0m:[36m94[0m - [1mDuckDB initialized[0m
+[32m2026-03-28 22:21:46.719[0m | [34m[1mDEBUG   [0m | [36mapp.data.tdx_realtime[0m:[36m_test_one_server[0m:[36m60[0m - [34m[1mServer 39.105.251.234:7709 - 0.140s[0m
+[32m2026-03-28 22:21:46.724[0m | [34m[1mDEBUG   [0m | [36mapp.data.tdx_realtime[0m:[36m_test_one_server[0m:[36m60[0m - [34m[1mServer 43.145.21.43:7709 - 0.145s[0m
+[32m2026-03-28 22:21:46.744[0m | [34m[1mDEBUG   [0m | [36mapp.data.tdx_realtime[0m:[36m_test_one_server[0m:[36m60[0m - [34m[1mServer 47.100.132.162:7709 - 0.165s[0m
+[32m2026-03-28 22:21:46.746[0m | [34m[1mDEBUG   [0m | [36mapp.data.tdx_realtime[0m:[36m_test_one_server[0m:[36m60[0m - [34m[1mServer 39.108.28.83:7709 - 0.168s[0m
+[32m2026-03-28 22:21:48.757[0m | [34m[1mDEBUG   [0m | [36mapp.data.tdx_realtime[0m:[36m_test_one_server[0m:[36m60[0m - [34m[1mServer 112.74.214.43:7709 - 2.178s[0m
+[32m2026-03-28 22:21:48.918[0m | [1mINFO    [0m | [36mapp.data.tdx_realtime[0m:[36mconnect[0m:[36m93[0m - [1mConnected to TDX server 39.105.251.234:7709 (0.140s)[0m
+[32m2026-03-28 22:21:49.531[0m | [1mINFO    [0m | [36mapp.data.tdx_realtime[0m:[36mconnect[0m:[36m109[0m - [1mConnection pool: 4 parallel connections[0m
+[32m2026-03-28 22:21:49.531[0m | [1mINFO    [0m | [36mapp.main[0m:[36mlifespan[0m:[36m100[0m - [1mTDX connected to {'host': '39.105.251.234', 'port': 7709}[0m
+[32m2026-03-28 22:21:49.531[0m | [1mINFO    [0m | [36mapp.data.feed_manager[0m:[36mregister[0m:[36m47[0m - [1mDataFeed registered: pytdx[0m
+[32m2026-03-28 22:21:49.541[0m | [1mINFO    [0m | [36mapp.data.feed_manager[0m:[36mregister[0m:[36m47[0m - [1mDataFeed registered: adata[0m
+[32m2026-03-28 22:21:50.300[0m | [1mINFO    [0m | [36mapp.data.feed_manager[0m:[36mregister[0m:[36m47[0m - [1mDataFeed registered: sina[0m
+[32m2026-03-28 22:21:50.300[0m | [1mINFO    [0m | [36mapp.main[0m:[36mlifespan[0m:[36m106[0m - [1mDataFeedManager: ['pytdx', 'adata', 'sina'][0m
+[32m2026-03-28 22:22:10.049[0m | [1mINFO    [0m | [36mapp.data.tdx_realtime[0m:[36mget_bond_list[0m:[36m335[0m - [1mFound 365 convertible bonds[0m
+[32m2026-03-28 22:22:10.052[0m | [1mINFO    [0m | [36mapp.main[0m:[36m_quote_push_loop[0m:[36m48[0m - [1mQuote push started for 50 securities via DataFeedManager[0m
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:9389 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:10598 - "POST /api/v1/strategy/backtest HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:11096 - "POST /api/v1/strategy/backtest HTTP/1.1" 404 Not Found
