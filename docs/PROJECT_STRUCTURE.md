@@ -12,7 +12,9 @@ experimental material. They are not part of the default test gate.
 
 ```text
 backend/app/
-  api/       HTTP API handlers.
+  api/       HTTP API handlers, split by market where ownership is clear.
+    crypto/  Crypto-specific routes.
+    ashare/  A-share-specific routes.
   data/      Shared data adapters and compatibility wrappers.
   markets/   Market-owned implementations.
   macro/     Macro research services still used by the app.
@@ -50,7 +52,7 @@ Crypto active surface:
 - `backend/app/markets/crypto/crypto_market_data.py`
 - `backend/app/markets/crypto/okx_client.py`
 - `backend/app/markets/crypto/okx_feed.py`
-- `backend/app/api/okx_api.py`
+- `backend/app/api/crypto/okx_api.py`
 - `backend/app/markets/crypto/okx_t_runner.py`
 - `frontend/src/components/OkxTrading.tsx`
 
@@ -59,13 +61,15 @@ A-share active surface:
 - `backend/app/markets/ashare/akshare_feed.py`
 - `backend/app/markets/ashare/tdx_parser.py`
 - `backend/app/markets/ashare/tdx_realtime.py`
+- `backend/app/api/ashare/market.py`
+- `backend/app/api/ashare/bond.py`
 - `backend/app/trade/qmt_bridge.py`
 - `backend/tests/integration/test_easyxt_bridge_contract.py`
 - External data lake: `/srv/lan-ai/data/ashare`
 - External checks: `/srv/lan-ai/artifacts/ashare-data-checks`
 
-Compatibility wrappers remain under `backend/app/data/` and
-`backend/app/strategy/` so older imports keep working during migration.
+Compatibility wrappers remain under `backend/app/data/`, `backend/app/api/`,
+and `backend/app/strategy/` so older imports keep working during migration.
 
 Cold zone, not default scope:
 

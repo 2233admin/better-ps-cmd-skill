@@ -50,17 +50,17 @@ $env:KATANA_EASYXT_BRIDGE_URL = "http://127.0.0.1:8000"
 | `trade/ths_bridge.py` | 同花顺交易桥接 |
 | `trade/qmt_bridge.py` | QMT(XtQuant) 桥接 |
 | `trade/ctp_bridge.py` | CTP 期货桥接 |
-| `api/market.py` | A股行情 API |
+| `api/ashare/market.py` | A股行情 API |
 | `api/order.py` | 订单 API |
 | `api/portfolio.py` | 持仓组合 API |
-| `api/bond.py` | 债券 API |
+| `api/ashare/bond.py` | 债券 API |
 
 ### 🪙 加密货币(OKX)模块
 | 文件 | 说明 |
 |------|------|
 | `data/okx_client.py` | OKX API 客户端 |
 | `data/okx_feed.py` | OKX 数据源 |
-| `api/okx_api.py` | OKX REST 端点 |
+| `api/crypto/okx_api.py` | OKX REST 端点 |
 | `trade/okx_bridge.py` | OKX 交易桥接 |
 | `strategy/okx_t_runner.py` | OKX 做T执行器 |
 | `strategy/materialist_engine.py` | 唯物引擎(矛盾检测) |

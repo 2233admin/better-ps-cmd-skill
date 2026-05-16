@@ -7,14 +7,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from .api.market import router as market_router
-from .api.bond import router as bond_router
+from .api.ashare.market import router as market_router
+from .api.ashare.bond import router as bond_router
 from .api.portfolio import router as portfolio_router
 from .api.strategy_api import router as strategy_router
 from .api.order import router as order_router
 from .api.ai_api import router as ai_router
 from .api.macro_api import router as macro_router
-from .api.okx_api import router as okx_router
+from .api.crypto.okx_api import router as okx_router
 from .ws.realtime import (
     ws_quotes_handler,
     ws_trades_handler,
