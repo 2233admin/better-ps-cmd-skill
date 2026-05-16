@@ -46,6 +46,13 @@ from app.data.crypto_market_data import get_market_data_client
 from core.engine import HistMatEngine
 from core.types import DomainConfig, ReductionResult
 
+
+def configure_logging(json_output: bool) -> None:
+    logger.remove()
+    if not json_output:
+        logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "INFO"))
+
+
 # hist-mat 配置（加密货币市场）
 DOMAIN_CRYPTO = DomainConfig(
     name="crypto_market",
@@ -164,15 +171,28 @@ def analyze_pair_histmat(pair: str, klines: pl.DataFrame) -> dict:
         p_risk_series.append(output.p_risk)
 
     p_arr = np.array(p_risk_series)
+    if len(p_arr) == 0:
+        return {
+            "pair": pair,
+            "p_risk_current": 0.5,
+            "p_risk_mean": 0.5,
+            "p_risk_max": 0.5,
+            "p_risk_min": 0.5,
+            "crisis_signals": 0,
+            "stable_signals": 0,
+            "bars": klines.height,
+            "warning": f"insufficient bars for hist-mat lookback={lookback}",
+        }
 
     return {
         "pair": pair,
-        "p_risk_current": float(p_arr[-1]) if len(p_arr) > 0 else 0.5,
+        "p_risk_current": float(p_arr[-1]),
         "p_risk_mean": float(np.mean(p_arr)),
         "p_risk_max": float(np.max(p_arr)),
         "p_risk_min": float(np.min(p_arr)),
         "crisis_signals": int(np.sum(p_arr > 0.65)),
         "stable_signals": int(np.sum(p_arr < 0.35)),
+        "bars": klines.height,
     }
 
 
@@ -502,6 +522,7 @@ async def main():
     parser.add_argument("--json", action="store_true", help="只输出 JSON 结果")
 
     args = parser.parse_args()
+    configure_logging(args.json)
     pairs = [p.strip() for p in args.pairs.split(",")]
 
     logger.info("=" * 100)
