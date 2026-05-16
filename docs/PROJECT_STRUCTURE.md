@@ -26,8 +26,19 @@ backend/tests/
 frontend/
   src/       Next.js terminal UI.
 
+backend/tools/
+  data/      Manual data maintenance probes. Not part of the app runtime.
+
 docs/
   *.md       Architecture decisions and operator notes.
+
+docs/archive/
+  Older quickstarts and historical implementation notes.
+
+legacy/
+  futures/          Futures and Wenhua/Sanli material, parked for later.
+  macro-platform/   Old Streamlit macro dashboard.
+  experiments/      GPU and strategy-search experiments.
 ```
 
 ## Market Ownership
@@ -54,13 +65,29 @@ A-share active surface:
 
 Cold zone, not default scope:
 
-- `backend/run_futures_backtest.py`
-- `backend/run_materialist_futures.py`
+- `legacy/futures/backend-scripts/run_futures_backtest.py`
+- `legacy/futures/backend-scripts/run_materialist_futures.py`
 - `backend/app/data/futures_feed.py`
 - `backend/app/strategy/futures_strategies.py`
-- `examples/wenhua_*.py`
-- GPU search scripts under `backend/run_gpu_*.py` and `backend/run_cuda_*.py`
-- Root Streamlit/macro scripts such as `宏观分析平台.py` and `stock_visualizer.py`
+- `legacy/futures/examples/wenhua_*.py`
+- GPU search scripts under `legacy/experiments/gpu/`
+- Strategy experiment runners under `legacy/experiments/strategy-runs/`
+- Old Streamlit/macro scripts under `legacy/macro-platform/`
+
+## Root Policy
+
+Repository root should stay boring:
+
+- `README.md`
+- `backend/`
+- `frontend/`
+- `docs/`
+- `scripts/`
+- `legacy/`
+
+Do not add new one-off scripts to the root. Put active backend commands under
+`backend/`, shared smoke/test commands under `scripts/`, and parked experiments
+under `legacy/`.
 
 ## Test Gate
 
