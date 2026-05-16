@@ -14,6 +14,10 @@ venv/
 *.duckdb
 *.sqlite
 *.sqlite3
+/.claude/
+/data/
+backend/.anton/
+backend/C:/
 backend/data/
 backend/results/
 backend/wenhua_export/

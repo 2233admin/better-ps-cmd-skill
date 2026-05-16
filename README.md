@@ -18,6 +18,12 @@ k-atana trade intent -> EasyXT phase1 bridge -> sim journal / QMT adapter
 
 后端测试固定使用仓库内虚拟环境，避免系统 Python 版本和依赖漂移：
 
+```bash
+scripts/test-katana.sh all
+```
+
+项目当前按两个主市场收口：数字货币和 A 股。期货、GPU 搜索和老宏观/Streamlit 入口先保留为冷区，不进入默认测试门禁。目录边界见：[Project Structure](docs/PROJECT_STRUCTURE.md)。
+
 ```powershell
 cd C:\Users\Administrator\projects\k-atana\backend
 .\run_tests.ps1
