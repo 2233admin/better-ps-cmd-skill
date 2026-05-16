@@ -9,12 +9,16 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from datetime import datetime
 import numpy as np
 import polars as pl
-import torch
 from loguru import logger
+
+try:
+    import torch
+except ImportError:  # GPU support is optional for CPU backtests.
+    torch = None
 
 
 @dataclass
@@ -67,11 +71,15 @@ class BacktestEngine:
             use_gpu: 是否使用GPU加速
         """
         self.config = config or BacktestConfig()
-        self.use_gpu = use_gpu and torch.cuda.is_available()
-        self.device = torch.device('cuda' if self.use_gpu else 'cpu')
+        self._torch: Optional[Any] = torch
+        self.use_gpu = bool(use_gpu and self._torch and self._torch.cuda.is_available())
+        self.device = self._torch.device('cuda' if self.use_gpu else 'cpu') if self._torch else None
+
+        if use_gpu and not self.use_gpu:
+            logger.warning("[BacktestEngine] GPU不可用，使用CPU")
 
         if self.use_gpu:
-            logger.info(f"[BacktestEngine] GPU加速已启用: {torch.cuda.get_device_name(0)}")
+            logger.info(f"[BacktestEngine] GPU加速已启用: {self._torch.cuda.get_device_name(0)}")
 
         self._equity_curve: Optional[pl.DataFrame] = None
         self._trades: List[Dict] = []
@@ -177,6 +185,11 @@ class BacktestEngine:
         strategy_name: str
     ) -> BacktestResult:
         """GPU版本回测"""
+        if self._torch is None:
+            raise RuntimeError("GPU backtest requires the optional torch dependency")
+
+        torch = self._torch
+
         # 将数据移到GPU
         close = torch.tensor(data['close'].to_numpy(), dtype=torch.float32, device=self.device)
         signal = torch.tensor(signals['signal'].to_numpy(), dtype=torch.float32, device=self.device)

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Runtime logs and local data
+*.log
+*.duckdb
+*.sqlite
+*.sqlite3
+backend/data/
+backend/results/
+backend/wenhua_export/
+backend/backtest_report_*.txt
+examples/results/
+
+# Frontend
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+frontend/.turbo/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local secrets/config
+.env
+.env.*
+!.env.example

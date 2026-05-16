@@ -101,7 +101,7 @@ class RBreakerStrategy(Strategy):
             treverse = row['trend_reverse']
             rreverse = row['range_reverse']
 
-            if bbreak == 0:
+            if any(level is None for level in (bbreak, sbreak, treverse, rreverse)):
                 continue
 
             signal_type = None
