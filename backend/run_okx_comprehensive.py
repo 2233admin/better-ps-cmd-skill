@@ -12,19 +12,37 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
-import httpx
 import numpy as np
 import polars as pl
 from loguru import logger
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, r'C:\Users\Administrator\hist-mat')
 
-from app.data.okx_client import get_okx_client
+
+def _bootstrap_hist_mat() -> None:
+    candidates = [
+        os.getenv("HIST_MAT_HOME"),
+        os.getenv("KATANA_HIST_MAT_HOME"),
+        "/srv/hist-mat",
+        str(Path(__file__).resolve().parents[2] / "hist-mat"),
+        r"C:\Users\Administrator\projects\hist-mat",
+        r"C:\Users\Administrator\hist-mat",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            sys.path.insert(0, str(candidate))
+            return
+    raise RuntimeError("hist-mat repository not found; set HIST_MAT_HOME or KATANA_HIST_MAT_HOME")
+
+
+_bootstrap_hist_mat()
+
+from app.data.crypto_market_data import get_market_data_client
 from core.engine import HistMatEngine
 from core.types import DomainConfig, ReductionResult
 
@@ -182,7 +200,7 @@ def simple_backtest(df: pl.DataFrame, pair: str) -> dict:
 
 async def comprehensive_analysis(pairs: list[str], limit: int = 200):
     """综合分析：回测 + hist-mat + 舆情"""
-    client = get_okx_client()
+    market_data = get_market_data_client()
 
     results = []
 
@@ -190,7 +208,7 @@ async def comprehensive_analysis(pairs: list[str], limit: int = 200):
         logger.info(f"\n分析 {pair}...")
 
         # 1. 拉取 K 线
-        klines = client.get_kline(pair, bar="4H", limit=limit)
+        klines, market_data_source = market_data.get_kline(pair, bar="4H", limit=limit)
         if not klines:
             logger.warning(f"  {pair}: 无数据")
             continue
@@ -237,6 +255,7 @@ async def comprehensive_analysis(pairs: list[str], limit: int = 200):
 
         results.append({
             "pair": pair,
+            "market_data_source": market_data_source,
             "backtest": backtest,
             "histmat": histmat,
             "sentiment": sentiment,
@@ -291,6 +310,7 @@ async def main():
     parser = argparse.ArgumentParser(description="OKX 综合分析系统")
     parser.add_argument("--pairs", default="BTC-USDT,ETH-USDT,SOL-USDT,BNB-USDT,XRP-USDT", help="交易对")
     parser.add_argument("--limit", type=int, default=200, help="K线数量")
+    parser.add_argument("--json", action="store_true", help="只输出 JSON 结果")
 
     args = parser.parse_args()
     pairs = [p.strip() for p in args.pairs.split(",")]
@@ -300,13 +320,26 @@ async def main():
     logger.info("=" * 100)
 
     results = await comprehensive_analysis(pairs, args.limit)
-    print_comprehensive_report(results)
+    payload = {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "provider": "katana",
+        "exchange": "okx",
+        "requested_pairs": pairs,
+        "result_count": len(results),
+        "results": results,
+    }
+
+    if not args.json:
+        print_comprehensive_report(results)
 
     # 保存结果
     out_file = Path(__file__).parent / "results" / f"okx_comprehensive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     out_file.parent.mkdir(exist_ok=True)
-    out_file.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    out_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info(f"\n结果已保存: {out_file}")
+
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":

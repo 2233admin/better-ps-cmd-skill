@@ -180,31 +180,11 @@ async def get_tickers():
         return _tickers_cache["data"]
 
     def _fetch():
-        import requests as req
-        # OKX 支持批量获取所有 SPOT tickers，一个请求搞定
-        r = req.get('https://www.okx.com/api/v5/market/tickers',
-                     params={'instType': 'SWAP'}, timeout=5)
-        all_tickers = r.json().get('data', [])
-        pairs_set = {p + '-SWAP' for p in _TICKER_PAIRS}
-        result = []
-        for t in all_tickers:
-            if t['instId'] in pairs_set:
-                last = float(t.get('last', 0))
-                sod = float(t.get('sodUtc8', 0)) or last
-                change = (last - sod) / sod * 100 if sod else 0
-                result.append({
-                    "instId": t['instId'],
-                    "pair": t['instId'].replace('-SWAP', ''),
-                    "last": last,
-                    "askPx": float(t.get('askPx', 0)),
-                    "bidPx": float(t.get('bidPx', 0)),
-                    "high24h": float(t.get('high24h', 0)),
-                    "low24h": float(t.get('low24h', 0)),
-                    "vol24h": float(t.get('volCcy24h', 0)),
-                    "change": round(change, 2),
-                })
-        result.sort(key=lambda x: abs(x['change']), reverse=True)
-        return {"tickers": result, "ts": time.time()}
+        from ..data.crypto_market_data import get_market_data_client
+
+        client = get_market_data_client()
+        result, source = client.get_tickers(_TICKER_PAIRS)
+        return {"tickers": result, "source": source, "ts": time.time()}
 
     loop = asyncio.get_event_loop()
     data = await loop.run_in_executor(None, _fetch)
@@ -219,19 +199,15 @@ async def get_ticker(inst_id: str):
     import asyncio
 
     def _fetch():
-        from ..data.okx_client import get_okx_client
-        client = get_okx_client()
+        from ..data.crypto_market_data import get_market_data_client
+
+        client = get_market_data_client()
         swap_id = inst_id if inst_id.endswith('-SWAP') else inst_id + '-SWAP'
-        t = client.get_ticker(swap_id)
-        return {
-            "instId": swap_id,
-            "last": float(t.get('last', 0)),
-            "askPx": float(t.get('askPx', 0)),
-            "bidPx": float(t.get('bidPx', 0)),
-            "high24h": float(t.get('high24h', 0)),
-            "low24h": float(t.get('low24h', 0)),
-            "vol24h": float(t.get('volCcy24h', 0)),
-        }
+        ticker, source = client.get_ticker(swap_id)
+        if not ticker:
+            raise HTTPException(502, f"ticker unavailable for {swap_id}")
+        ticker["source"] = source
+        return ticker
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _fetch)
@@ -245,16 +221,14 @@ async def get_kline(pair: str, bar: str = "1m", limit: int = 200):
     import asyncio
 
     def _fetch():
-        import requests as req
+        from ..data.crypto_market_data import get_market_data_client
+
+        client = get_market_data_client()
         swap_id = pair if pair.endswith('-SWAP') else pair + '-SWAP'
-        r = req.get('https://www.okx.com/api/v5/market/candles',
-                     params={'instId': swap_id, 'bar': bar, 'limit': str(limit)},
-                     timeout=10)
-        raw = r.json().get('data', [])
-        # OKX 返回 [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
-        # 时间倒序，需要反转
+        raw, source = client.get_kline(swap_id, bar=bar, limit=limit)
         data = []
-        for item in reversed(raw):
+        rows = list(reversed(raw)) if source == "okx" else raw
+        for item in rows:
             ts_ms = int(item[0])
             from datetime import datetime, timezone
             dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
@@ -267,7 +241,7 @@ async def get_kline(pair: str, bar: str = "1m", limit: int = 200):
                 "volume": float(item[5]),
                 "amount": float(item[7]) if len(item) > 7 else 0,
             })
-        return {"data": data, "count": len(data)}
+        return {"data": data, "count": len(data), "source": source}
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _fetch)
