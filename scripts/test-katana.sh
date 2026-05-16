@@ -75,8 +75,11 @@ from pathlib import Path
 
 manifest = Path(sys.argv[1])
 payload = json.loads(manifest.read_text(encoding="utf-8"))
-entries = payload.get("entries", payload if isinstance(payload, list) else [])
-print(f"ashare coverage OK: {len(entries)} entries from {manifest}")
+entries = payload.get("items", payload.get("entries", [])) if isinstance(payload, dict) else payload
+kline_entries = [item for item in entries if item.get("dataset") == "kline_daily"]
+if not kline_entries:
+    raise SystemExit(f"no kline_daily coverage entries in {manifest}")
+print(f"ashare coverage OK: {len(kline_entries)} kline_daily entries from {manifest}")
 PY
 }
 
