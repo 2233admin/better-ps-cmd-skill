@@ -14,6 +14,24 @@ k-atana trade intent -> EasyXT phase1 bridge -> sim journal / QMT adapter
 
 详见：[Architecture Decision: QMT Phase-1 Boundary](docs/ARCHITECTURE_DECISION_QMT_PHASE1.md)
 
+## 周一测试门禁
+
+后端测试固定使用仓库内虚拟环境，避免系统 Python 版本和依赖漂移：
+
+```powershell
+cd C:\Users\Administrator\projects\k-atana\backend
+.\run_tests.ps1
+```
+
+默认门禁覆盖回测核心、策略信号和 trade intent 合约。EasyXT bridge 联调是可选外部服务测试：
+
+```powershell
+$env:KATANA_EASYXT_BRIDGE_URL = "http://127.0.0.1:8000"
+.\run_tests.ps1 -Target "tests\integration"
+```
+
+`k-atana` 只生成 broker-agnostic trade intent；QMT 下单、dry-run/sim journal 和幂等由 EasyXT phase-1 bridge 承担。
+
 ## 模块分类
 
 ### 📊 A股模块

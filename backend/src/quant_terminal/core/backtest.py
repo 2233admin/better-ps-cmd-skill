@@ -277,19 +277,21 @@ class BacktestEngine:
 
     def _calculate_returns(self, df: pl.DataFrame) -> pl.DataFrame:
         """计算收益"""
-        return df.with_columns([
+        df = df.with_columns([
+            pl.col('position').shift(1).fill_null(0).alias('prev_position'),
             ((pl.col('close') - pl.col('close').shift(1)) / pl.col('close').shift(1)).alias('price_change'),
         ]).with_columns([
-            (pl.col('price_change') * pl.col('position').shift(1)).alias('daily_return'),
+            (pl.col('position') - pl.col('prev_position')).abs().alias('trade_size'),
         ]).with_columns([
-            pl.when(pl.col('position').shift(1) != 0)
-            .then(pl.col('daily_return') - (self.config.commission + self.config.slippage))
-            .otherwise(pl.col('daily_return'))
-            .alias('daily_return')
+            (
+                (pl.col('price_change').fill_null(0) * pl.col('prev_position'))
+                - (pl.col('trade_size') * (self.config.commission + self.config.slippage))
+            ).alias('daily_return')
         ]).with_columns([
             pl.col('daily_return').fill_null(0).cum_sum().alias('cumulative_return'),
             (self.config.initial_capital * (1 + pl.col('daily_return').fill_null(0).cum_sum())).alias('equity')
         ])
+        return df
 
     def _extract_trades(self, df: pl.DataFrame) -> pl.DataFrame:
         """提取交易记录"""
@@ -298,36 +300,54 @@ class BacktestEngine:
         entry_time = None
         entry_price = None
         entry_direction = None
+        entry_index = None
 
-        for row in df.iter_rows(named=True):
+        for index, row in enumerate(df.iter_rows(named=True)):
             position = row['position']
-            prev_position = row.get('position', 0) if 'position' in row else 0
+            prev_position = row.get('prev_position', 0) if 'prev_position' in row else 0
 
-            # 检测开平仓
-            if prev_position == 0 and position != 0:
+            def close_trade() -> None:
+                nonlocal entry_time, entry_price, entry_direction, entry_index
+                if entry_time is None:
+                    return
+
+                exit_time = row['datetime']
+                exit_price = row['close']
+
+                pnl = (exit_price - entry_price) / entry_price
+                if entry_direction == 'short':
+                    pnl = -pnl
+
+                trades.append({
+                    'entry_time': entry_time,
+                    'exit_time': exit_time,
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'direction': entry_direction,
+                    'pnl': pnl - self.config.commission - self.config.slippage,
+                    'bars_held': max(index - entry_index, 0)
+                })
+
+                entry_time = None
+                entry_price = None
+                entry_direction = None
+                entry_index = None
+
+            def open_trade() -> None:
+                nonlocal entry_time, entry_price, entry_direction, entry_index
                 entry_time = row['datetime']
                 entry_price = row['close']
                 entry_direction = 'long' if position == 1 else 'short'
+                entry_index = index
+
+            # 检测开平仓
+            if prev_position == 0 and position != 0:
+                open_trade()
             elif prev_position != 0 and position == 0:
-                if entry_time is not None:
-                    exit_time = row['datetime']
-                    exit_price = row['close']
-
-                    pnl = (exit_price - entry_price) / entry_price
-                    if entry_direction == 'short':
-                        pnl = -pnl
-
-                    trades.append({
-                        'entry_time': entry_time,
-                        'exit_time': exit_time,
-                        'entry_price': entry_price,
-                        'exit_price': exit_price,
-                        'direction': entry_direction,
-                        'pnl': pnl - self.config.commission - self.config.slippage,
-                        'bars_held': 1  # 简化计算
-                    })
-
-                    entry_time = None
+                close_trade()
+            elif prev_position != 0 and position != 0 and prev_position != position:
+                close_trade()
+                open_trade()
 
         if trades:
             return pl.DataFrame(trades)
