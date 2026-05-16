@@ -31,14 +31,27 @@ unit() {
   require_python
   cd "$BACKEND"
   "$PYTHON" -m py_compile \
-    app/data/crypto_market_data.py \
-    app/api/okx_api.py \
+    app/api/strategy_api.py \
+    app/api/crypto/okx_api.py \
+    app/api/research/backtest.py \
+    app/api/research/strategy.py \
+    app/api/trading/crypto_live_test.py \
+    app/api/trading/paper.py \
+    app/markets/crypto/crypto_market_data.py \
+    app/research/hmc.py \
+    app/research/models.py \
+    app/research/pit.py \
+    app/trading/executor.py \
+    app/trading/intent.py \
+    app/trading/risk.py \
+    app/trading/adapters/okx/bridge.py \
+    app/trading/adapters/qmt/bridge.py \
     run_okx_comprehensive.py
-  if "$PYTHON" -c "import pytest" >/dev/null 2>&1; then
-    "$PYTHON" -m pytest tests/unit tests/contract
-  else
-    echo "pytest not installed; unit pytest skipped after py_compile"
-  fi
+  "$PYTHON" -c "import pytest" >/dev/null 2>&1 || {
+    echo "pytest not installed in $PYTHON; install backend test dependencies first." >&2
+    exit 2
+  }
+  "$PYTHON" -m pytest tests/unit tests/contract
 }
 
 crypto() {

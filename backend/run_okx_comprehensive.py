@@ -14,7 +14,9 @@ import asyncio
 import json
 import os
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +26,7 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).parent))
 
 
-def _bootstrap_hist_mat() -> None:
+def _bootstrap_hist_mat() -> bool:
     candidates = [
         os.getenv("HIST_MAT_HOME"),
         os.getenv("KATANA_HIST_MAT_HOME"),
@@ -36,15 +38,60 @@ def _bootstrap_hist_mat() -> None:
     for candidate in candidates:
         if candidate and Path(candidate).exists():
             sys.path.insert(0, str(candidate))
-            return
-    raise RuntimeError("hist-mat repository not found; set HIST_MAT_HOME or KATANA_HIST_MAT_HOME")
+            return True
+    return False
 
 
-_bootstrap_hist_mat()
+HIST_MAT_AVAILABLE = _bootstrap_hist_mat()
 
 from app.data.crypto_market_data import get_market_data_client
-from core.engine import HistMatEngine
-from core.types import DomainConfig, ReductionResult
+
+if HIST_MAT_AVAILABLE:
+    try:
+        from core.engine import HistMatEngine
+        from core.types import DomainConfig, ReductionResult
+    except Exception as exc:
+        HIST_MAT_AVAILABLE = False
+        HIST_MAT_IMPORT_ERROR = str(exc)
+else:
+    HIST_MAT_IMPORT_ERROR = "hist-mat repository not found"
+
+if not HIST_MAT_AVAILABLE:
+
+    @dataclass(frozen=True)
+    class DomainConfig:
+        name: str
+        sigmoid_k: float
+        sigmoid_x0: float
+        agency_weights: dict
+        surplus_rate_range: tuple[float, float]
+        v_label: str
+        s_label: str
+        c_label: str
+        has_censorship: bool
+        min_texts: int
+
+    @dataclass(frozen=True)
+    class ReductionResult:
+        gap_rs: float
+        sss_reduced: float
+        censorship_pressure: float
+        sentiment_divergence: float
+        entropy: float
+        ideology_penetration: float
+
+    class HistMatEngine:
+        def __init__(self, domain: DomainConfig):
+            self.domain = domain
+
+        def run(self, v_raw: float, s_raw: float, c_raw: float, reduction: ReductionResult):
+            p_risk = _clip01(
+                0.25 * reduction.gap_rs
+                + 0.25 * reduction.censorship_pressure
+                + 0.25 * reduction.sentiment_divergence
+                + 0.25 * reduction.entropy
+            )
+            return SimpleNamespace(p_risk=p_risk)
 
 
 def configure_logging(json_output: bool) -> None:
@@ -193,6 +240,8 @@ def analyze_pair_histmat(pair: str, klines: pl.DataFrame) -> dict:
         "crisis_signals": int(np.sum(p_arr > 0.65)),
         "stable_signals": int(np.sum(p_arr < 0.35)),
         "bars": klines.height,
+        "source": "hist-mat" if HIST_MAT_AVAILABLE else "fallback",
+        "warning": None if HIST_MAT_AVAILABLE else HIST_MAT_IMPORT_ERROR,
     }
 
 

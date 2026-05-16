@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Query
 
 from ..data.store import get_store
-from ..trade.executor import get_executor
+from ..trading.executor import get_executor
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 

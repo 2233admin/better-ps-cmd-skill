@@ -3,7 +3,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..trade.executor import get_executor
+from ..trading.executor import get_executor
+from ..trading.intent import TradingMode, require_trading_mode
 
 router = APIRouter(prefix="/order", tags=["order"])
 
@@ -19,6 +20,10 @@ class OrderRequest(BaseModel):
 @router.post("/submit")
 async def submit_order(order: OrderRequest):
     """提交订单"""
+    try:
+        require_trading_mode(TradingMode.PAPER, TradingMode.LIVE_TEST)
+    except RuntimeError as exc:
+        raise HTTPException(403, str(exc))
     executor = get_executor()
     result = executor.submit_order(
         code=order.code,

@@ -1,4 +1,4 @@
-"""A股日内量化交易终端 - FastAPI 后端入口"""
+"""Multi-market quantitative research terminal - FastAPI backend."""
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -15,6 +15,7 @@ from .api.order import router as order_router
 from .api.ai_api import router as ai_router
 from .api.macro_api import router as macro_router
 from .api.crypto.okx_api import router as okx_router
+from .api.trading.paper import router as paper_trading_router
 from .ws.realtime import (
     ws_quotes_handler,
     ws_trades_handler,
@@ -26,7 +27,7 @@ from .data.tdx_realtime import get_tdx_engine
 from .data.feed_manager import get_feed_manager
 from .data.store import get_store
 from .strategy.engine import get_strategy_engine
-from .trade.executor import get_executor
+from .trading.executor import get_executor
 from .trade.account_reader import get_account_reader_manager
 
 
@@ -87,7 +88,7 @@ async def _account_sync_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    logger.info("=== A股日内量化交易终端 启动 ===")
+    logger.info("=== k-atana research terminal started ===")
 
     # 初始化数据存储
     store = get_store()
@@ -121,8 +122,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="A股日内量化交易终端",
-    description="基于通达信的AI全自动化交易平台",
+    title="k-atana research terminal",
+    description="Multi-market quantitative research terminal with controlled trading tests",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -145,6 +146,7 @@ app.include_router(order_router, prefix="/api/v1")
 app.include_router(ai_router, prefix="/api/v1")
 app.include_router(macro_router, prefix="/api/v1")
 app.include_router(okx_router, prefix="/api/v1")
+app.include_router(paper_trading_router, prefix="/api/v1")
 
 # WebSocket
 app.websocket("/ws/quotes")(ws_quotes_handler)
@@ -156,7 +158,7 @@ app.websocket("/ws/alerts")(ws_alerts_handler)
 @app.get("/")
 async def root():
     return {
-        "name": "A股日内量化交易终端",
+        "name": "k-atana research terminal",
         "version": "0.1.0",
         "status": "running",
         "endpoints": {

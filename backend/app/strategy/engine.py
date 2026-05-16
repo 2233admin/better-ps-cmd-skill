@@ -121,7 +121,7 @@ class StrategyEngine:
     def _process_strategy(self, name: str, quotes: list[dict]):
         """处理策略逻辑 → 生成信号 → 自动下单"""
         from .signals import generate_signals
-        from ..trade.executor import get_executor
+        from ..trading.executor import get_executor
 
         signals = generate_signals(name, quotes, self.strategies[name].params)
         if not signals:
@@ -150,7 +150,7 @@ class StrategyEngine:
     def _process_t_strategy(self, quotes: list[dict]):
         """处理做T策略"""
         from .t_strategy import get_t_strategy
-        from ..trade.executor import get_executor
+        from ..trading.executor import get_executor
 
         t_strat = get_t_strategy()
         strategy = self.strategies["t_trading"]

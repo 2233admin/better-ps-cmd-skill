@@ -12,7 +12,7 @@ from loguru import logger
 from app.markets.crypto.okx_feed import fetch_usdt_tickers, okx_to_quotes
 from app.markets.crypto.okx_client import get_okx_client
 from app.strategy.t_strategy import TStrategy, TStrategyConfig
-from app.trade.executor import OrderExecutor
+from app.trading.executor import OrderExecutor
 
 
 # 加密货币做T的默认参数 (波动更大，阈值放宽)

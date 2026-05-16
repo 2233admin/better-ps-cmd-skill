@@ -1,9 +1,10 @@
 # Project Structure
 
-Katana has two active market lines:
+Katana is a multi-market quantitative research terminal with two active market
+lines:
 
-- `crypto`: OKX market data, factors, smoke analysis, and frontend views.
-- `ashare`: A-share research, QMT boundary contracts, and the external Parquet lake.
+- `crypto`: OKX market data, factors, smoke analysis, paper trading, and gated live_test.
+- `ashare`: A-share research, QMT/EasyXT boundary contracts, and the external Parquet lake.
 
 Futures, GPU searches, and older macro/Streamlit tools are retained as legacy or
 experimental material. They are not part of the default test gate.
@@ -13,13 +14,26 @@ experimental material. They are not part of the default test gate.
 ```text
 backend/app/
   api/       HTTP API handlers, split by market where ownership is clear.
-    crypto/  Crypto-specific routes.
-    ashare/  A-share-specific routes.
+    crypto/    Crypto-specific routes.
+    ashare/    A-share-specific routes.
+    research/  Strategy and backtest routes.
+    trading/   Paper and gated trading-test routes.
   data/      Shared data adapters and compatibility wrappers.
   markets/   Market-owned implementations.
   macro/     Macro research services still used by the app.
   strategy/  Backtest, factors, and signal logic.
-  trade/     Broker-neutral intent and bridge boundaries.
+  research/  Target home for factors, signals, backtest, reports, PIT, and HMC.
+    models.py  Core research schemas.
+    pit.py     Point-in-time query facade.
+    hmc.py     HMC/materialist dynamics research boundary.
+  trading/   Active execution layer.
+    intent/   Trading mode and order intent primitives.
+    paper/    Simulated execution helpers.
+    risk/     Risk checks.
+    adapters/
+      okx/    Gated crypto live_test adapter.
+      qmt/    QMT/EasyXT boundary adapter.
+  trade/     Compatibility wrappers during migration.
 
 backend/tests/
   unit/      Fast local tests.
@@ -63,13 +77,15 @@ A-share active surface:
 - `backend/app/markets/ashare/tdx_realtime.py`
 - `backend/app/api/ashare/market.py`
 - `backend/app/api/ashare/bond.py`
-- `backend/app/trade/qmt_bridge.py`
+- `backend/app/trading/adapters/qmt/bridge.py`
+- `backend/app/trade/qmt_bridge.py` compatibility wrapper
 - `backend/tests/integration/test_easyxt_bridge_contract.py`
 - External data lake: `/srv/lan-ai/data/ashare`
 - External checks: `/srv/lan-ai/artifacts/ashare-data-checks`
 
 Compatibility wrappers remain under `backend/app/data/`, `backend/app/api/`,
-and `backend/app/strategy/` so older imports keep working during migration.
+`backend/app/strategy/`, and `backend/app/trade/` so older imports keep working
+during migration.
 
 Cold zone, not default scope:
 
@@ -117,3 +133,20 @@ scripts/test-katana.sh frontend
 The frontend build is explicit because it depends on `frontend/node_modules`.
 Integration tests are also explicit because they may need EasyXT, QMT, or bridge
 services outside this repository.
+
+## Product Boundary
+
+The runtime boundary is defined in [Product Boundary](PRODUCT_BOUNDARY.md).
+
+Default mode:
+
+```text
+KATANA_TRADING_MODE=research
+```
+
+Crypto live_test requires `KATANA_TRADING_MODE=live_test`,
+`KATANA_ENABLE_CRYPTO_LIVE_TEST=1`, a numeric `KATANA_OKX_MAX_ORDER_USDT`, and
+explicit `KATANA_OKX_ALLOWED_PAIRS`.
+
+A-share execution defaults to `KATANA_ASHARE_EXECUTION=manual`; only
+`easyxt_bridge` may submit broker-neutral intents to an external bridge.
