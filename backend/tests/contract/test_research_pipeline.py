@@ -1401,6 +1401,92 @@ def test_incremental_ingest_overwrites_same_symbol_event_time(tmp_path):
     assert (root / "_manifest" / "new_content_hash").exists()
 
 
+def test_pipeline_normalize_legacy_uses_trading_calendar_for_available_at(tmp_path):
+    from app.research.pipeline.calendar import build_calendar_snapshot
+    from app.research.pipeline.cli import main
+
+    data_root = tmp_path / "lake"
+    data_root.mkdir()
+    legacy = pl.DataFrame(
+        {
+            "code": ["600000"] * 45,
+            "market": [1] * 45,
+            "date": [date(2026, 4, 3) + timedelta(days=i) for i in range(45)],
+            "open": [10.0 + i * 0.08 for i in range(45)],
+            "high": [10.1 + i * 0.08 for i in range(45)],
+            "low": [9.9 + i * 0.08 for i in range(45)],
+            "close": [10.05 + i * 0.08 for i in range(45)],
+            "volume": [1_000_000 + i for i in range(45)],
+            "amount": [10_000_000.0 + i for i in range(45)],
+        }
+    )
+    legacy.write_parquet(data_root / "kline_daily.parquet")
+
+    calendar_seed = pl.DataFrame(
+        [
+            {
+                "symbol": "600000.SH",
+                "market": "SH",
+                "event_time": datetime(2026, 5, 15, tzinfo=UTC),
+                "available_at": datetime(2026, 5, 15, 16, tzinfo=UTC),
+                "source_updated_at": datetime(2026, 5, 15, 17, tzinfo=UTC),
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "volume": 1_000_000,
+                "amount": 10_100_000.0,
+            },
+            {
+                "symbol": "600000.SH",
+                "market": "SH",
+                "event_time": datetime(2026, 5, 18, tzinfo=UTC),
+                "available_at": datetime(2026, 5, 18, 16, tzinfo=UTC),
+                "source_updated_at": datetime(2026, 5, 18, 17, tzinfo=UTC),
+                "open": 10.1,
+                "high": 10.3,
+                "low": 10.0,
+                "close": 10.2,
+                "volume": 1_100_000,
+                "amount": 11_220_000.0,
+            },
+        ]
+    )
+    calendar_seed_path = tmp_path / "calendar_seed.parquet"
+    calendar_seed.write_parquet(calendar_seed_path)
+    build_calendar_snapshot(
+        pit_path=calendar_seed_path,
+        out_root=data_root,
+        start=date(2026, 5, 15),
+        end=date(2026, 5, 18),
+    )
+
+    out_dir = tmp_path / "run"
+    assert (
+        main(
+            [
+                "--date",
+                "2026-05-18",
+                "--symbols",
+                "600000.SH",
+                "--data-root",
+                str(data_root),
+                "--out",
+                str(out_dir),
+                "--code-commit",
+                "abc1234",
+            ]
+        )
+        == 0
+    )
+
+    normalized = pl.read_parquet(out_dir / "normalized_kline_daily_pit.parquet")
+    fri_row = normalized.filter(pl.col("event_time") == datetime(2026, 5, 15, tzinfo=UTC))
+    assert fri_row.height == 1
+    assert fri_row["available_at"].to_list()[0] == datetime(2026, 5, 18, 9, 30, tzinfo=UTC)
+    assert fri_row["source_updated_at"].to_list()[0] == datetime(2026, 5, 18, 9, 30, tzinfo=UTC)
+
+
 def _load_script(path: Path):
     import importlib.util
 

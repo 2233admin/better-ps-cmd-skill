@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -36,6 +37,7 @@ from app.research.pipeline.data_lake import (
     resolve_adjustment_factor_parquet,
     resolve_kline_daily_parquet,
     resolve_tradability_status_parquet,
+    resolve_trading_calendar_parquet,
 )
 from app.research.snapshot import DatasetSnapshotGenerator
 
@@ -230,7 +232,8 @@ def _materialize_pit_input(config: PipelineConfig, source_path: Path) -> tuple[P
     if {"code", "market", "date", "open", "high", "low", "close", "volume", "amount"}.issubset(
         set(frame.columns)
     ):
-        normalized = _normalize_legacy_kline(frame, config.symbols)
+        calendar = _load_trading_calendar(config.data_root) if config.data_root is not None else None
+        normalized = _normalize_legacy_kline(frame, config.symbols, calendar=calendar)
         path = config.out_dir / "normalized_kline_daily_pit.parquet"
         normalized.write_parquet(path)
         return path, _merge_optional_pit_layers(config, normalized)
@@ -593,9 +596,35 @@ def _write_fixture_parquet(config: PipelineConfig) -> Path:
     return path
 
 
-def _normalize_legacy_kline(frame: pl.DataFrame, symbols: tuple[str, ...]) -> pl.DataFrame:
+def _load_trading_calendar(data_root: Path) -> pl.DataFrame | None:
+    calendar_path = resolve_trading_calendar_parquet(data_root)
+    if calendar_path is None:
+        return None
+    calendar = pl.read_parquet(calendar_path)
+    if "is_trading_day" not in calendar.columns or "date" not in calendar.columns or "market" not in calendar.columns:
+        return None
+    return (
+        calendar.filter(pl.col("is_trading_day"))
+        .select(pl.col("market").cast(pl.Utf8), pl.col("date"))
+        .sort(["market", "date"])
+    )
+
+
+def _normalize_legacy_kline(
+    frame: pl.DataFrame,
+    symbols: tuple[str, ...],
+    calendar: pl.DataFrame | None = None,
+) -> pl.DataFrame:
     rows: list[dict[str, Any]] = []
     wanted = set(symbols)
+    market_trading_days: dict[str, list[date]] = {}
+    if calendar is not None:
+        for market_value in calendar["market"].unique().to_list():
+            key = str(market_value)
+            market_trading_days[key] = [
+                _date_value(value)
+                for value in calendar.filter(pl.col("market") == market_value)["date"].to_list()
+            ]
     for row in frame.iter_rows(named=True):
         symbol = _legacy_symbol(row["code"], row["market"])
         if wanted and symbol not in wanted:
@@ -607,11 +636,25 @@ def _normalize_legacy_kline(frame: pl.DataFrame, symbols: tuple[str, ...]) -> pl
             current_date.day,
             tzinfo=UTC,
         )
-        available_at = event_time + timedelta(days=1, hours=9, minutes=30)
+        market_label = "SH" if int(row["market"]) == 1 else "SZ"
+        available_at = _conservative_available_at(event_time)
+        trading_days = market_trading_days.get(market_label)
+        if trading_days:
+            idx = bisect_right(trading_days, current_date)
+            if idx < len(trading_days):
+                next_td = trading_days[idx]
+                available_at = datetime(
+                    next_td.year,
+                    next_td.month,
+                    next_td.day,
+                    9,
+                    30,
+                    tzinfo=UTC,
+                )
         rows.append(
             {
                 "symbol": symbol,
-                "market": "SH" if int(row["market"]) == 1 else "SZ",
+                "market": market_label,
                 "event_time": event_time,
                 "available_at": available_at,
                 "source_updated_at": available_at,
@@ -626,6 +669,10 @@ def _normalize_legacy_kline(frame: pl.DataFrame, symbols: tuple[str, ...]) -> pl
     if not rows:
         raise ValueError(f"legacy kline input contains none of the requested symbols: {symbols}")
     return pl.DataFrame(rows)
+
+
+def _conservative_available_at(event_time: datetime) -> datetime:
+    return event_time + timedelta(days=1, hours=9, minutes=30)
 
 
 def _merge_optional_pit_layers(config: PipelineConfig, frame: pl.DataFrame) -> pl.DataFrame:

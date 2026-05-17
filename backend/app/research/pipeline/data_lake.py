@@ -93,6 +93,27 @@ def resolve_adjustment_factor_parquet(data_root: Path) -> Path | None:
     return None
 
 
+def resolve_trading_calendar_parquet(data_root: Path) -> Path | None:
+    """Find an optional trading-calendar snapshot parquet under a data lake root.
+
+    Matches the layout produced by `app.research.pipeline.calendar.build_calendar_snapshot`
+    (`<data_root>/calendar/trading_calendar.parquet`), plus coverage-manifest entries
+    keyed under `ashare.trading_calendar`.
+    """
+
+    if not data_root.exists():
+        return None
+    canonical = data_root / "calendar" / "trading_calendar.parquet"
+    if _has_columns(canonical, {"date", "market", "is_trading_day"}):
+        return canonical
+    candidates = _dataset_candidates(data_root, {"ashare.trading_calendar"})
+    candidates.extend(_glob_dataset_candidates(data_root, ("*trading*calendar*.parquet",)))
+    for candidate in candidates:
+        if _has_columns(candidate, {"date", "market", "is_trading_day"}):
+            return candidate
+    return None
+
+
 def _manifest_candidates(data_root: Path) -> list[Path]:
     manifest = data_root / "_manifest" / "coverage.json"
     if not manifest.exists():
