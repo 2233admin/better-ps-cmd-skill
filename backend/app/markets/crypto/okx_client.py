@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 from datetime import datetime, timezone
 
@@ -22,17 +23,27 @@ class OKXClient:
 
     def __init__(
         self,
-        api_key: str = "",
-        secret_key: str = "",
-        passphrase: str = "",
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        passphrase: str | None = None,
         simulated: bool = False,
     ):
-        self.api_key = api_key
-        self.secret_key = secret_key
-        self.passphrase = passphrase
+        self.api_key = api_key if api_key is not None else os.environ.get("OKX_API_KEY", "")
+        self.secret_key = secret_key if secret_key is not None else os.environ.get("OKX_SECRET_KEY", "")
+        self.passphrase = passphrase if passphrase is not None else os.environ.get("OKX_PASSPHRASE", "")
         self.simulated = simulated  # True = 模拟盘
         self.session = requests.Session()
         self.session.timeout = 10
+
+    def has_credentials(self) -> bool:
+        return bool(self.api_key and self.secret_key and self.passphrase)
+
+    def _missing_credentials_response(self) -> dict:
+        return {
+            "code": "-1",
+            "msg": "OKX credentials missing: set OKX_API_KEY, OKX_SECRET_KEY, and OKX_PASSPHRASE",
+            "data": [],
+        }
 
     def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
         """生成 HMAC SHA256 签名"""
@@ -61,6 +72,8 @@ class OKXClient:
 
     def _get(self, path: str, params: dict | None = None, auth: bool = False) -> dict:
         """GET 请求"""
+        if auth and not self.has_credentials():
+            return self._missing_credentials_response()
         url = self.BASE_URL + path
         if params:
             qs = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
@@ -76,8 +89,18 @@ class OKXClient:
             logger.error(f"OKX GET {path}: {e}")
             return {"code": "-1", "msg": str(e), "data": []}
 
-    def _post(self, path: str, data: dict) -> dict:
+    def _post(self, path: str, data: dict, katana_gate_token: str = "") -> dict:
         """POST 请求 (需认证)"""
+        if not self.has_credentials():
+            return self._missing_credentials_response()
+        if path in {"/api/v5/trade/order", "/api/v5/trade/order-algo"} and (
+            katana_gate_token != "OKXBridge.live_test"
+        ):
+            return {
+                "code": "katana_gate_required",
+                "msg": "OKX order rejected: use OKXBridge live_test gate",
+                "data": [],
+            }
         body = json.dumps(data)
         headers = self._headers("POST", path, body)
         try:
@@ -144,8 +167,17 @@ class OKXClient:
         price: str | None = None,
         ord_type: str = "limit",  # "market" or "limit"
         td_mode: str = "cash",  # "cash"=现货, "cross"=全仓, "isolated"=逐仓
+        katana_gate_token: str = "",
     ) -> dict:
         """下单"""
+        if not self.has_credentials():
+            r = self._missing_credentials_response()
+            return {"error": r["msg"], "code": r["code"]}
+        if katana_gate_token != "OKXBridge.live_test":
+            return {
+                "error": "OKX order rejected: use OKXBridge live_test gate",
+                "code": "katana_gate_required",
+            }
         params = {
             "instId": inst_id,
             "tdMode": td_mode,
@@ -156,7 +188,7 @@ class OKXClient:
         if price and ord_type == "limit":
             params["px"] = price
 
-        r = self._post("/api/v5/trade/order", params)
+        r = self._post("/api/v5/trade/order", params, katana_gate_token=katana_gate_token)
         if r.get("code") == "0":
             order_data = r["data"][0]
             logger.info(f"OKX order placed: {side} {inst_id} size={size} -> {order_data}")
@@ -193,9 +225,5 @@ _client: OKXClient | None = None
 def get_okx_client() -> OKXClient:
     global _client
     if _client is None:
-        _client = OKXClient(
-            api_key="d6875510-5965-4ad2-8820-49ebf5ab2085",
-            secret_key="E7172B6326FD0DBCBBA1D5E2B0E0A446",
-            passphrase="Xyt456321..",
-        )
+        _client = OKXClient()
     return _client

@@ -99,6 +99,7 @@ class OKXBridge:
             price=f"{price:.8g}",
             ord_type="limit",
             td_mode=self._td_mode(),
+            katana_gate_token="OKXBridge.live_test",
         )
         if "error" in result:
             return {"error": result["error"]}

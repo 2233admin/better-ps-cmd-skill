@@ -11,6 +11,17 @@ _scan_cache: dict = {"data": None, "ts": 0}
 _SCAN_INTERVAL = 4 * 3600  # 4小时
 
 
+def _reject_direct_order_route() -> None:
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Direct OKX order routes are disabled. Use OKXBridge live_test with "
+            "KATANA_TRADING_MODE=live_test, KATANA_ENABLE_CRYPTO_LIVE_TEST=1, "
+            "KATANA_OKX_ALLOWED_PAIRS, and KATANA_OKX_MAX_ORDER_USDT."
+        ),
+    )
+
+
 # ---- 账户 ----
 
 @router.get("/account")
@@ -278,34 +289,7 @@ class TradeRequest(BaseModel):
 @router.post("/trade")
 async def execute_trade(req: TradeRequest):
     """执行交易"""
-    from app.markets.crypto.okx_client import get_okx_client
-    client = get_okx_client()
-
-    swap_id = req.pair if req.pair.endswith('-SWAP') else req.pair + '-SWAP'
-
-    # 设置杠杆
-    client._post('/api/v5/account/set-leverage', {
-        'instId': swap_id, 'lever': str(req.lever), 'mgnMode': 'cross',
-    })
-
-    # 下单
-    params = {
-        'instId': swap_id,
-        'tdMode': 'cross',
-        'side': req.side,
-        'posSide': req.posSide,
-        'ordType': req.ordType,
-        'sz': req.size,
-    }
-    if req.price and req.ordType == 'limit':
-        params['px'] = req.price
-
-    result = client._post('/api/v5/trade/order', params)
-
-    if result.get('code') != '0':
-        raise HTTPException(400, f"Order failed: {result}")
-
-    return {"orderId": result['data'][0]['ordId'], "status": "placed"}
+    _reject_direct_order_route()
 
 
 class AlgoRequest(BaseModel):
@@ -319,33 +303,7 @@ class AlgoRequest(BaseModel):
 @router.post("/set-sl-tp")
 async def set_sl_tp(req: AlgoRequest):
     """设置止损止盈"""
-    from app.markets.crypto.okx_client import get_okx_client
-    client = get_okx_client()
-
-    close_side = 'sell' if req.posSide == 'long' else 'buy'
-    results = []
-
-    if req.slPrice:
-        r = client._post('/api/v5/trade/order-algo', {
-            'instId': req.instId, 'tdMode': 'cross',
-            'side': close_side, 'posSide': req.posSide,
-            'ordType': 'conditional', 'sz': req.size,
-            'slTriggerPx': req.slPrice, 'slOrdPx': '-1',
-            'slTriggerPxType': 'last',
-        })
-        results.append({"type": "SL", "code": r.get('code')})
-
-    if req.tpPrice:
-        r = client._post('/api/v5/trade/order-algo', {
-            'instId': req.instId, 'tdMode': 'cross',
-            'side': close_side, 'posSide': req.posSide,
-            'ordType': 'conditional', 'sz': req.size,
-            'tpTriggerPx': req.tpPrice, 'tpOrdPx': '-1',
-            'tpTriggerPxType': 'last',
-        })
-        results.append({"type": "TP", "code": r.get('code')})
-
-    return {"results": results}
+    _reject_direct_order_route()
 
 
 class CloseRequest(BaseModel):
@@ -357,19 +315,7 @@ class CloseRequest(BaseModel):
 @router.post("/close")
 async def close_position(req: CloseRequest):
     """市价平仓"""
-    from app.markets.crypto.okx_client import get_okx_client
-    client = get_okx_client()
-
-    close_side = 'sell' if req.posSide == 'long' else 'buy'
-    result = client._post('/api/v5/trade/order', {
-        'instId': req.instId, 'tdMode': 'cross',
-        'side': close_side, 'posSide': req.posSide,
-        'ordType': 'market', 'sz': req.size,
-    })
-
-    if result.get('code') != '0':
-        raise HTTPException(400, f"Close failed: {result}")
-    return {"status": "closed", "orderId": result['data'][0]['ordId']}
+    _reject_direct_order_route()
 
 
 # ---- 一键交易 (根据分析计划) ----
@@ -381,86 +327,4 @@ class QuickTradeRequest(BaseModel):
 @router.post("/quick-trade")
 async def quick_trade(req: QuickTradeRequest):
     """根据唯物分析结果一键下单"""
-    import requests as http_requests
-    from app.strategy.materialist_engine import MaterialistEngine
-    from app.markets.crypto.okx_client import get_okx_client
-
-    client = get_okx_client()
-    engine = MaterialistEngine(capital=50, leverage=20)
-    plans = engine.get_trading_plan()
-
-    if req.planIndex >= len(plans):
-        raise HTTPException(400, f"Plan index {req.planIndex} out of range (have {len(plans)})")
-
-    plan = plans[req.planIndex]
-    pair = plan['pair']
-    signal = plan['signal']
-    swap_id = pair + '-SWAP'
-    side = 'buy' if signal == 'LONG' else 'sell'
-    pos_side = 'long' if signal == 'LONG' else 'short'
-    close_side = 'sell' if signal == 'LONG' else 'buy'
-
-    # 合约规格
-    r = http_requests.get('https://www.okx.com/api/v5/public/instruments',
-                          params={'instType': 'SWAP', 'instId': swap_id}, timeout=10)
-    spec = r.json().get('data', [{}])[0]
-    ct_val = float(spec.get('ctVal', '1'))
-    min_sz = float(spec.get('minSz', '1'))
-
-    # 计算下单量
-    notional = plan['sizing']['notional']
-    price = plan['price']
-    size = notional / (ct_val * price)
-    size = max(min_sz, round(size / min_sz) * min_sz)
-    size_str = f"{size:g}"
-
-    # 杠杆
-    client._post('/api/v5/account/set-leverage', {
-        'instId': swap_id, 'lever': '20', 'mgnMode': 'cross',
-    })
-
-    # 取最新价
-    t = client.get_ticker(swap_id)
-    exec_price = float(t['askPx']) if side == 'buy' else float(t['bidPx'])
-
-    # 下单
-    result = client._post('/api/v5/trade/order', {
-        'instId': swap_id, 'tdMode': 'cross',
-        'side': side, 'posSide': pos_side,
-        'ordType': 'limit', 'sz': size_str, 'px': str(exec_price),
-    })
-
-    if result.get('code') != '0':
-        raise HTTPException(400, f"Order failed: {result}")
-
-    ord_id = result['data'][0]['ordId']
-
-    # 止损止盈
-    import time
-    time.sleep(1)
-    sl = plan['levels']['stop_loss']
-    tp = plan['levels']['take_profit']
-
-    client._post('/api/v5/trade/order-algo', {
-        'instId': swap_id, 'tdMode': 'cross',
-        'side': close_side, 'posSide': pos_side,
-        'ordType': 'conditional', 'sz': size_str,
-        'slTriggerPx': str(sl), 'slOrdPx': '-1', 'slTriggerPxType': 'last',
-    })
-    client._post('/api/v5/trade/order-algo', {
-        'instId': swap_id, 'tdMode': 'cross',
-        'side': close_side, 'posSide': pos_side,
-        'ordType': 'conditional', 'sz': size_str,
-        'tpTriggerPx': str(tp), 'tpOrdPx': '-1', 'tpTriggerPxType': 'last',
-    })
-
-    return {
-        "orderId": ord_id,
-        "signal": signal,
-        "pair": swap_id,
-        "price": exec_price,
-        "size": size_str,
-        "stopLoss": sl,
-        "takeProfit": tp,
-        "margin": plan['sizing']['margin'],
-    }
+    _reject_direct_order_route()
