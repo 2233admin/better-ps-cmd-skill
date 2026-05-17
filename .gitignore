@@ -16,6 +16,8 @@ venv/
 *.sqlite
 *.sqlite3
 /.claude/
+/.vibeskills/
+/outputs/
 /data/
 backend/.anton/
 backend/C:/
@@ -24,6 +26,11 @@ backend/results/
 backend/wenhua_export/
 backend/backtest_report_*.txt
 examples/results/
+
+# Local A-share control-plane runs and ad hoc lake outputs
+katana-ashare-control-runs/
+katana-control-plane-smoke-runs/
+katana-control-plane-smoke-lake/
 
 # Frontend
 frontend/.next/

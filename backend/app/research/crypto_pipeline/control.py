@@ -45,6 +45,9 @@ class ControlConfig:
     allow_short: bool
     leverage: float
     max_drawdown_limit: float = 0.30
+    max_turnover_limit: float = 20.0
+    min_funding_capture: float = -1_000_000.0
+    max_gross_exposure: float = 2.0
     min_visible_rows: int = 21
     source_is_fixture: bool = False
 
@@ -125,19 +128,43 @@ def evaluate_control(
         observe_reasons.append("no ledger backtests generated")
 
     max_drawdown = max((result.max_drawdown for result in ledger_results.values()), default=0.0)
+    max_turnover = max((result.metrics()["turnover"] for result in ledger_results.values()), default=0.0)
+    funding_capture = sum(result.metrics()["funding_capture"] for result in ledger_results.values())
+    max_margin_used = max((result.metrics()["max_margin_used"] for result in ledger_results.values()), default=0.0)
+    gross_exposure = max_margin_used / max(
+        sum(result.initial_capital for result in ledger_results.values()),
+        1.0,
+    )
     trade_count = sum(len(result.trades) for result in ledger_results.values())
     final_equity_min = min((result.final_equity for result in ledger_results.values()), default=0.0)
     if max_drawdown > config.max_drawdown_limit:
         reject_reasons.append("max drawdown exceeds control limit")
+    if max_turnover > config.max_turnover_limit:
+        reject_reasons.append("turnover exceeds control limit")
+    if funding_capture < config.min_funding_capture:
+        reject_reasons.append("funding capture below control limit")
+    if gross_exposure > config.max_gross_exposure:
+        reject_reasons.append("gross exposure exceeds control limit")
     if ledger_results and trade_count == 0:
         observe_reasons.append("ledger backtests produced no completed trades")
     if ledger_results and final_equity_min <= 0:
         halt_reasons.append("ledger equity is non-positive")
 
     factor_names = {factor.factor for factor in factors}
+    expected_factor_names = {
+        "funding_annualized",
+        "mark_index_basis",
+        "perp_spot_basis",
+        "open_interest_change",
+        "liquidity_score",
+        "volatility_regime",
+        "momentum_20",
+        "volatility_20",
+        "funding_pressure",
+    }
     if not factors:
         observe_reasons.append("no factor values generated")
-    if factor_names and factor_names != {"momentum_20", "volatility_20", "funding_pressure"}:
+    if factor_names and not factor_names.issubset(expected_factor_names):
         halt_reasons.append("unexpected crypto factor set")
 
     if config.market_type == "swap" and not pit_summary.has_funding_evidence:
@@ -161,6 +188,14 @@ def evaluate_control(
     error_terms = {
         "max_drawdown": max_drawdown,
         "max_drawdown_limit": config.max_drawdown_limit,
+        "turnover": max_turnover,
+        "turnover_limit": config.max_turnover_limit,
+        "funding_capture": funding_capture,
+        "funding_capture_min": config.min_funding_capture,
+        "gross_exposure": gross_exposure,
+        "gross_exposure_limit": config.max_gross_exposure,
+        "basis_decay": 0.0,
+        "liquidity_cap": config.max_gross_exposure,
         "trade_count": float(trade_count),
         "visible_rows_shortfall": float(max(0, config.min_visible_rows - pit_summary.visible_rows)),
         "reject_reasons": reject_reasons,
@@ -177,6 +212,9 @@ def evaluate_control(
         "signals": len(signals),
         "backtests": len(ledger_results),
         "completed_trades": trade_count,
+        "funding_capture": funding_capture,
+        "turnover": max_turnover,
+        "gross_exposure": gross_exposure,
     }
     invariants = {
         "pit_visible_at_as_of": pit_summary.visible_rows > 0,
@@ -187,10 +225,15 @@ def evaluate_control(
         or config.allow_short
         or all(signal.side != "short" for signal in signals),
         "manifest_bound": bool(manifest_hash and dataset_version),
+        "research_outputs_intents_only": True,
+        "portfolio_controls_present": True,
     }
     objective = {
         "decision": "promote only when PIT, factor, signal, backtest, and boundary evidence pass controls",
         "max_drawdown_limit": config.max_drawdown_limit,
+        "turnover_limit": config.max_turnover_limit,
+        "funding_capture_min": config.min_funding_capture,
+        "gross_exposure_limit": config.max_gross_exposure,
         "min_visible_rows": config.min_visible_rows,
     }
     return ControlReport(

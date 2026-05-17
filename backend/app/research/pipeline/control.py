@@ -25,6 +25,7 @@ class ASharePITValidationSummary:
     st_rows: int = 0
     limit_up_rows: int = 0
     limit_down_rows: int = 0
+    tradability_status_missing_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class AShareControlConfig:
     min_symbol_coverage_ratio: float = 1.0
     reject_symbol_coverage_ratio: float = 0.80
     source_is_fixture: bool = False
+    require_tradability_status: bool = True
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,7 @@ def summarize_ashare_pit(frame: pl.DataFrame, visible: pl.DataFrame) -> ASharePI
         st_rows=_true_count(visible, "is_st"),
         limit_up_rows=_true_count(visible, "limit_up"),
         limit_down_rows=_true_count(visible, "limit_down"),
+        tradability_status_missing_rows=_missing_tradability_status_rows(visible),
     )
 
 
@@ -134,6 +137,8 @@ def evaluate_ashare_control(
         observe_reasons.append("symbol coverage below observe threshold")
     if config.source_is_fixture:
         observe_reasons.append("fixture data cannot promote")
+    if config.require_tradability_status and pit_summary.tradability_status_missing_rows:
+        observe_reasons.append("tradability status PIT missing or incomplete")
     if factor_values == 0:
         observe_reasons.append("no factor values generated")
     if signals == 0:
@@ -196,6 +201,7 @@ def evaluate_ashare_control(
         "backtests": len(ledger_results),
         "completed_trades": completed_trades,
         "rejected_orders": rejected_orders,
+        "tradability_status_missing_rows": pit_summary.tradability_status_missing_rows,
         "package_decision": package_decision,
         "position_cap": config.position_cap,
     }
@@ -219,6 +225,7 @@ def evaluate_ashare_control(
         "position_cap_valid": 0 < config.position_cap <= 1,
         "symbol_coverage_complete": coverage_ratio >= config.min_symbol_coverage_ratio,
         "execution_not_embedded": True,
+        "tradability_status_bound": pit_summary.tradability_status_missing_rows == 0,
     }
     objective = {
         "decision": "promote only when PIT, factor, signal, backtest, and morning package evidence pass controls",
@@ -245,3 +252,12 @@ def _true_count(frame: pl.DataFrame, column: str) -> int:
     if column not in frame.columns:
         return 0
     return int(frame.filter(pl.col(column).fill_null(False)).height)
+
+
+def _missing_tradability_status_rows(frame: pl.DataFrame) -> int:
+    if frame.is_empty():
+        return 0
+    required = {"is_st", "is_suspended", "limit_up", "limit_down", "listed_days", "is_tradable"}
+    if not required.issubset(frame.columns):
+        return frame.height
+    return int(frame.filter(pl.col("is_tradable").is_null()).height)

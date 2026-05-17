@@ -52,6 +52,14 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
         "scan_results.json",
         "scan_results.csv",
         "scan_results.parquet",
+        "backtest_summary.parquet",
+        "backtest_orders.parquet",
+        "backtest_trades.parquet",
+        "backtest_equity_curve.parquet",
+        "portfolio_orders.parquet",
+        "portfolio_fills.parquet",
+        "portfolio_positions.parquet",
+        "portfolio_equity_curve.parquet",
         "backtest/orders.csv",
         "backtest/fills.csv",
         "backtest/daily_ledger.csv",
@@ -69,12 +77,14 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
         assert (out_dir / relative).exists(), relative
     assert not (out_dir / "signals.json").exists()
     assert not (out_dir / "factors.json").exists()
+    assert not (out_dir / "backtest" / "600000.SH").exists()
 
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     scan_results = json.loads((out_dir / "scan_results.json").read_text(encoding="utf-8"))
     signal_rows = pl.read_parquet(out_dir / "signals.parquet")
     factor_rows = pl.read_parquet(out_dir / "factors.parquet")
     metrics = json.loads((out_dir / "backtest" / "metrics.json").read_text(encoding="utf-8"))
+    summary_rows = pl.read_parquet(out_dir / "backtest_summary.parquet")
     audit = json.loads(
         (out_dir / "morning_package" / "audit.json").read_text(encoding="utf-8")
     )
@@ -89,6 +99,7 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
     assert scan_results[0]["backtest_status"] == "completed"
     assert "momentum_20d" in scan_results[0]
     assert metrics["metrics"]["max_drawdown"] >= 0
+    assert summary_rows["symbol"].to_list() == ["600000.SH"]
     assert audit["manifest_hash"] == manifest["manifest_hash"]
     assert audit["control_decision"] in {"promote", "observe", "reject", "halt"}
     assert audit["control_report_path"] == "control_report.json"
@@ -150,6 +161,238 @@ def test_pipeline_full_artifact_level_keeps_large_json_compatibility(tmp_path):
     assert (out_dir / "factors.parquet").exists()
     assert (out_dir / "signals.json").exists()
     assert (out_dir / "factors.json").exists()
+    assert (out_dir / "backtest" / "600000.SH" / "metrics.json").exists()
+
+
+def test_world_snapshot_filters_future_available_rows(tmp_path):
+    from app.research.pipeline.world_snapshot import build_world_snapshot
+
+    root = tmp_path / "lake"
+    parquet = root / "pit" / "kline_daily_pit.parquet"
+    parquet.parent.mkdir(parents=True)
+    frame = pl.concat(
+        [
+            _pit_frame(),
+            pl.DataFrame(
+                {
+                    "symbol": ["600000.SH"],
+                    "market": ["SH"],
+                    "event_time": [datetime(2026, 5, 17, tzinfo=UTC)],
+                    "available_at": [datetime(2026, 5, 18, 9, tzinfo=UTC)],
+                    "source_updated_at": [datetime(2026, 5, 18, 9, tzinfo=UTC)],
+                    "open": [99.0],
+                    "high": [100.0],
+                    "low": [98.0],
+                    "close": [99.0],
+                    "volume": [100],
+                    "amount": [9900.0],
+                }
+            ),
+        ],
+        how="vertical_relaxed",
+    )
+    frame.write_parquet(parquet)
+
+    result = build_world_snapshot(
+        data_root=root,
+        as_of_date=date(2026, 5, 17),
+        out_dir=tmp_path / "world",
+    )
+    rows = pl.read_parquet(result.parquet_path)
+
+    assert result.snapshot_id == "ashare.world_snapshot_v1:2026-05-17"
+    assert rows.height == 1
+    assert rows["close"].to_list() == [13.52]
+    assert rows.filter(pl.col("available_at") > pl.col("as_of")).is_empty()
+    assert rows["research_eligible"].to_list() == [True]
+
+
+def test_world_snapshot_merges_tradability_status_pit(tmp_path):
+    from app.research.pipeline.world_snapshot import build_world_snapshot
+
+    root = tmp_path / "lake"
+    parquet = root / "pit" / "kline_daily_pit.parquet"
+    status = root / "pit" / "tradability_status_pit.parquet"
+    parquet.parent.mkdir(parents=True)
+    _pit_frame().write_parquet(parquet)
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "market": ["SH"],
+            "event_time": [datetime(2026, 5, 17, tzinfo=UTC)],
+            "available_at": [datetime(2026, 5, 17, 15, tzinfo=UTC)],
+            "source_updated_at": [datetime(2026, 5, 17, 15, tzinfo=UTC)],
+            "is_st": [True],
+            "is_suspended": [False],
+            "limit_up": [False],
+            "limit_down": [False],
+            "listed_days": [200],
+            "is_tradable": [False],
+            "reason": ["st_stock"],
+        }
+    ).write_parquet(status)
+
+    result = build_world_snapshot(
+        data_root=root,
+        as_of_date=date(2026, 5, 17),
+        out_dir=tmp_path / "world",
+    )
+    rows = pl.read_parquet(result.parquet_path)
+
+    assert rows["research_eligible"].to_list() == [False]
+    assert rows["tradable_reason"].to_list() == ["st_stock"]
+
+
+def test_pipeline_can_use_world_snapshot_as_universe(tmp_path):
+    from app.research.pipeline.cli import main
+    from app.research.pipeline.world_snapshot import build_world_snapshot
+
+    data_root = tmp_path / "lake"
+    parquet_dir = data_root / "pit"
+    parquet_dir.mkdir(parents=True)
+    pl.concat([_pit_frame("600000.SH"), _pit_frame("000001.SZ")]).write_parquet(
+        parquet_dir / "kline_daily_pit.parquet"
+    )
+    snapshot = build_world_snapshot(
+        data_root=data_root,
+        as_of_date=date(2026, 5, 17),
+        out_dir=tmp_path / "world",
+        symbols=("000001.SZ",),
+    )
+
+    out_dir = tmp_path / "snapshot-run"
+    assert (
+        main(
+            [
+                "--date",
+                "2026-05-17",
+                "--data-root",
+                str(data_root),
+                "--world-snapshot",
+                str(snapshot.parquet_path),
+                "--out",
+                str(out_dir),
+                "--code-commit",
+                "abc1234",
+            ]
+        )
+        == 0
+    )
+
+    rows = json.loads((out_dir / "scan_results.json").read_text(encoding="utf-8"))
+    assert [row["symbol"] for row in rows] == ["000001.SZ"]
+
+
+def test_pipeline_as_of_matches_world_snapshot_day_end_visibility(tmp_path):
+    from app.research.pipeline.cli import main
+    from app.research.pipeline.world_snapshot import build_world_snapshot
+
+    data_root = tmp_path / "lake"
+    parquet_dir = data_root / "pit"
+    parquet_dir.mkdir(parents=True)
+    frame = pl.concat(
+        [
+            _pit_frame("600000.SH"),
+            pl.DataFrame(
+                {
+                    "symbol": ["001393.SZ"],
+                    "market": ["SZ"],
+                    "event_time": [datetime(2026, 5, 16, tzinfo=UTC)],
+                    "available_at": [datetime(2026, 5, 16, 16, tzinfo=UTC)],
+                    "source_updated_at": [datetime(2026, 5, 16, 17, tzinfo=UTC)],
+                    "open": [10.0],
+                    "high": [10.2],
+                    "low": [9.9],
+                    "close": [10.1],
+                    "volume": [100],
+                    "amount": [1010.0],
+                }
+            ),
+        ],
+        how="vertical_relaxed",
+    )
+    frame.write_parquet(parquet_dir / "kline_daily_pit.parquet")
+    snapshot = build_world_snapshot(
+        data_root=data_root,
+        as_of_date=date(2026, 5, 16),
+        out_dir=tmp_path / "world",
+    )
+
+    out_dir = tmp_path / "snapshot-run"
+    assert (
+        main(
+            [
+                "--date",
+                "2026-05-16",
+                "--data-root",
+                str(data_root),
+                "--world-snapshot",
+                str(snapshot.parquet_path),
+                "--out",
+                str(out_dir),
+                "--code-commit",
+                "abc1234",
+            ]
+        )
+        == 0
+    )
+
+    control = json.loads((out_dir / "morning_package" / "control_report.json").read_text(encoding="utf-8"))
+    assert "001393.SZ" in control["observed_state"]["visible_symbols"]
+    assert "001393.SZ" not in control["observed_state"]["empty_or_missing_symbols"]
+
+
+def test_ashare_benchmark_writes_metrics(tmp_path):
+    from app.research.pipeline.benchmark import main
+
+    data_root = tmp_path / "lake"
+    parquet_dir = data_root / "pit"
+    manifest_dir = data_root / "_manifest"
+    parquet_dir.mkdir(parents=True)
+    manifest_dir.mkdir()
+    _pit_frame().write_parquet(parquet_dir / "kline_daily_pit.parquet")
+    (manifest_dir / "coverage.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "dataset": "ashare.kline_daily_pit",
+                        "path": "pit/kline_daily_pit.parquet",
+                        "symbols": ["600000.SH"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out_dir = tmp_path / "benchmark"
+    assert (
+        main(
+            [
+                "--date",
+                "2026-05-17",
+                "--data-root",
+                str(data_root),
+                "--out",
+                str(out_dir),
+                "--code-commit",
+                "abc1234",
+            ]
+        )
+        == 0
+    )
+
+    benchmark = json.loads((out_dir / "benchmark.json").read_text(encoding="utf-8"))
+    compact = json.loads((out_dir / "control_report.compact.json").read_text(encoding="utf-8"))
+    assert benchmark["duration_ms"] >= 0
+    assert benchmark["rows_per_sec"] >= 0
+    assert benchmark["symbols_per_sec"] >= 0
+    assert benchmark["requested_symbols"] == 1
+    assert "requested_symbols" not in compact["observed_state"]
+    assert compact["observed_state"]["requested_symbols_sample"] == ["600000.SH"]
+    assert (out_dir / "benchmark.csv").exists()
+    assert (out_dir / "control_report.compact.json").exists()
 
 
 def test_pipeline_scan_results_cover_all_requested_symbols(tmp_path):
@@ -500,6 +743,36 @@ def test_ledger_backtester_records_rejected_suspended_orders():
     assert len(sell_result.fills) == 1
 
 
+def test_ledger_backtester_records_rejected_not_tradable_orders():
+    import polars as pl
+
+    from app.research.backtest import AShareBacktestConfig, AShareLedgerBacktester
+
+    bars = pl.DataFrame(
+        {
+            "date": [date(2026, 5, 15)],
+            "symbol": ["600000.SH"],
+            "open": [10.0],
+            "high": [10.2],
+            "low": [9.9],
+            "close": [10.1],
+            "volume": [1_000_000],
+            "is_tradable": [False],
+            "reason": ["delisted"],
+        }
+    )
+    signals = pl.DataFrame({"date": [date(2026, 5, 15)], "signal": [1]})
+
+    result = AShareLedgerBacktester(AShareBacktestConfig()).run(
+        bars,
+        signals,
+        symbol="600000.SH",
+    )
+
+    assert result.orders[0].status == "rejected"
+    assert result.orders[0].reject_reason == "delisted"
+
+
 def test_ledger_backtester_rejects_same_day_t_plus_one_sell():
     import polars as pl
 
@@ -569,6 +842,45 @@ def test_ledger_backtester_does_not_look_ahead_to_future_signals():
     assert result.daily_ledger[2].position_qty == result.fills[0].qty
 
 
+def test_adjusted_factor_does_not_pollute_raw_execution_price(tmp_path):
+    from app.research.pipeline import PipelineConfig, run_pipeline
+
+    data_root = tmp_path / "lake"
+    pit_dir = data_root / "pit"
+    pit_dir.mkdir(parents=True)
+    kline = _pit_frame()
+    kline.write_parquet(pit_dir / "kline_daily_pit.parquet")
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH"] * kline.height,
+            "market": ["SH"] * kline.height,
+            "event_time": kline["event_time"].to_list(),
+            "available_at": kline["available_at"].to_list(),
+            "source_updated_at": kline["source_updated_at"].to_list(),
+            "adjustment_type": ["qfq"] * kline.height,
+            "factor": [2.0] * kline.height,
+        }
+    ).write_parquet(pit_dir / "adjustment_factor_pit.parquet")
+
+    out_dir = tmp_path / "adjusted-run"
+    run_pipeline(
+        PipelineConfig(
+            package_date=date(2026, 5, 17),
+            symbols=("600000.SH",),
+            out_dir=out_dir,
+            data_root=data_root,
+            code_commit="abc1234",
+        )
+    )
+
+    visible = pl.read_parquet(out_dir / "visible_kline_daily_pit.parquet")
+    orders = pl.read_parquet(out_dir / "backtest_orders.parquet")
+
+    assert "adjusted_close" in visible.columns
+    assert visible["adjusted_close"][0] == visible["close"][0] * 2
+    assert orders.filter(pl.col("status") == "filled")["intended_price"][0] in visible["close"].to_list()
+
+
 def test_research_pipeline_layer_has_no_trading_imports():
     package_dir = Path(__file__).resolve().parents[2] / "app" / "research" / "pipeline"
     source = "\n".join(path.read_text(encoding="utf-8") for path in package_dir.glob("*.py"))
@@ -576,6 +888,15 @@ def test_research_pipeline_layer_has_no_trading_imports():
     assert "app.trading" not in source
     assert "app.trade" not in source
     assert "quant_terminal.trade" not in source
+
+
+def test_ashare_control_plane_does_not_depend_on_duckdb_store():
+    package_dir = Path(__file__).resolve().parents[2] / "app" / "research" / "pipeline"
+    source = "\n".join(path.read_text(encoding="utf-8") for path in package_dir.glob("*.py"))
+
+    assert "import duckdb" not in source
+    assert "app.data.store" not in source
+    assert "DuckDBStore" not in source
 
 
 def test_pipeline_filters_sell_signals_for_buy_only_mvp(tmp_path):
@@ -668,9 +989,9 @@ def test_ashare_pipeline_control_counts_future_rows(tmp_path):
         {
             "symbol": ["600000.SH"],
             "market": ["SH"],
-            "event_time": [datetime(2026, 5, 17, tzinfo=UTC)],
-            "available_at": [datetime(2026, 5, 17, 16, tzinfo=UTC)],
-            "source_updated_at": [datetime(2026, 5, 17, 17, tzinfo=UTC)],
+            "event_time": [datetime(2026, 5, 18, tzinfo=UTC)],
+            "available_at": [datetime(2026, 5, 18, 16, tzinfo=UTC)],
+            "source_updated_at": [datetime(2026, 5, 18, 17, tzinfo=UTC)],
             "open": [99.0],
             "high": [100.0],
             "low": [98.0],
@@ -697,7 +1018,7 @@ def test_ashare_pipeline_control_counts_future_rows(tmp_path):
     )
     visible = pl.read_parquet(tmp_path / "out" / "visible_kline_daily_pit.parquet")
 
-    assert control["observed_state"]["rejected_future_rows"] == 2
+    assert control["observed_state"]["rejected_future_rows"] == 1
     assert visible["close"].to_list()[-1] != 99.0
     assert result.control_report.invariants["pit_visible_at_as_of"] is True
 
@@ -1025,6 +1346,59 @@ def test_ingest_script_normalizes_tdxcli_scan_out_dir(tmp_path):
     assert item["empty_symbols"] == ["000001.SZ"]
     assert item["failure_symbols"] == ["300999.SZ"]
     assert item["pit_symbols"] == ["600008.SH"]
+
+
+def test_incremental_ingest_overwrites_same_symbol_event_time(tmp_path):
+    root = tmp_path / "lake"
+    parquet = root / "pit" / "kline_daily_pit.parquet"
+    parquet.parent.mkdir(parents=True)
+    original = _pit_frame().filter(pl.col("event_time") <= datetime(2026, 4, 5, tzinfo=UTC))
+    original.write_parquet(parquet)
+    batch = pl.DataFrame(
+        {
+            "symbol": ["600000.SH", "600000.SH"],
+            "market": ["SH", "SH"],
+            "event_time": [datetime(2026, 4, 5, tzinfo=UTC), datetime(2026, 4, 6, tzinfo=UTC)],
+            "available_at": [datetime(2026, 4, 5, 16, tzinfo=UTC), datetime(2026, 4, 6, 16, tzinfo=UTC)],
+            "source_updated_at": [datetime(2026, 4, 5, 17, tzinfo=UTC), datetime(2026, 4, 6, 17, tzinfo=UTC)],
+            "open": [20.0, 21.0],
+            "high": [20.5, 21.5],
+            "low": [19.5, 20.5],
+            "close": [20.25, 21.25],
+            "volume": [200, 210],
+            "amount": [4050.0, 4462.5],
+        }
+    )
+    batch_path = tmp_path / "batch.parquet"
+    batch.write_parquet(batch_path)
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    incremental_module = _load_script(scripts_dir / "ingest-ashare-incremental.py")
+
+    assert (
+        incremental_module.main(
+            [
+                "--out-root",
+                str(root),
+                "--batch-parquet",
+                str(batch_path),
+                "--start",
+                "2026-04-05",
+                "--end",
+                "2026-04-06",
+            ]
+        )
+        == 0
+    )
+
+    merged = pl.read_parquet(parquet)
+    manifest = json.loads((root / "_manifest" / "incremental_batch.json").read_text(encoding="utf-8"))
+    assert merged.height == 4
+    assert merged.filter(pl.col("event_time") == datetime(2026, 4, 5, tzinfo=UTC))["close"].to_list() == [20.25]
+    assert manifest["batch_rows"] == 2
+    assert manifest["previous_content_hash"]
+    assert manifest["new_content_hash"]
+    assert (root / "_manifest" / "previous_content_hash").exists()
+    assert (root / "_manifest" / "new_content_hash").exists()
 
 
 def _load_script(path: Path):

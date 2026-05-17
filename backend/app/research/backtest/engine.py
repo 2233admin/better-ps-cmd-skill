@@ -151,6 +151,7 @@ class AShareLedgerBacktester:
                     total_equity=total_equity,
                     daily_pnl=total_equity - previous_equity,
                     drawdown=drawdown,
+                    margin_used=position_value,
                 )
             )
             previous_equity = total_equity
@@ -238,6 +239,8 @@ class AShareLedgerBacktester:
             return "suspended"
         if bool(row.get("is_st", False)):
             return "st_stock"
+        if "is_tradable" in row and not bool(row.get("is_tradable")):
+            return str(row.get("reason") or row.get("tradable_reason") or "not_tradable")
         if side == "buy" and bool(row.get("limit_up", False)):
             return "limit_up"
         if side == "sell" and bool(row.get("limit_down", False)):
@@ -328,9 +331,10 @@ class CryptoLedgerBacktester:
             price = closes[idx]
             target_side = self._target_side(signal_values[idx])
 
+            funding_cashflow = 0.0
             if position_side and self.config.market_type == "swap":
-                funding_fee = abs(position_qty) * price * funding_rates[idx] * position_side
-                cash -= funding_fee
+                funding_cashflow = -abs(position_qty) * price * funding_rates[idx] * position_side
+                cash += funding_cashflow
 
             if target_side != position_side:
                 if position_side:
@@ -388,6 +392,7 @@ class CryptoLedgerBacktester:
                         entry_time = current_time
 
             position_value = self._position_value(position_qty, price, entry_price)
+            margin_used = abs(position_qty) * entry_price / self.config.leverage if position_qty else 0.0
             total_equity = cash + position_value
             peak_equity = max(peak_equity, total_equity)
             drawdown = (peak_equity - total_equity) / peak_equity if peak_equity else 0.0
@@ -400,6 +405,8 @@ class CryptoLedgerBacktester:
                     total_equity=total_equity,
                     daily_pnl=total_equity - previous_equity,
                     drawdown=drawdown,
+                    funding_cashflow=funding_cashflow,
+                    margin_used=margin_used,
                 )
             )
             previous_equity = total_equity

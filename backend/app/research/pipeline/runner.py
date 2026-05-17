@@ -17,6 +17,7 @@ from app.research.backtest import (
     AShareLedgerBacktester,
     LedgerBacktestResult,
     write_backtest_artifacts,
+    write_backtest_tables,
 )
 from app.research.manifest import ExperimentManifest, sha256_json
 from app.research.models import Experiment, ExperimentStatus, Frequency, Market, ResearchSignal, SignalSide
@@ -31,7 +32,11 @@ from app.research.pipeline.control import (
     evaluate_ashare_control,
     summarize_ashare_pit,
 )
-from app.research.pipeline.data_lake import resolve_kline_daily_parquet
+from app.research.pipeline.data_lake import (
+    resolve_adjustment_factor_parquet,
+    resolve_kline_daily_parquet,
+    resolve_tradability_status_parquet,
+)
 from app.research.snapshot import DatasetSnapshotGenerator
 
 
@@ -42,6 +47,7 @@ class PipelineConfig:
     out_dir: Path
     pit_parquet: Path | None = None
     data_root: Path | None = None
+    world_snapshot: Path | None = None
     code_commit: str = "manual"
     initial_capital: float = 1_000_000.0
     position_cap: float = 0.05
@@ -84,7 +90,15 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
     source_is_fixture = config.pit_parquet is None and config.data_root is None
     pit_path = _resolve_input_parquet(config)
     pit_path, pit_frame = _materialize_pit_input(config, pit_path)
-    as_of = datetime.combine(config.package_date, datetime.min.time(), tzinfo=UTC)
+    as_of = datetime(
+        config.package_date.year,
+        config.package_date.month,
+        config.package_date.day,
+        23,
+        59,
+        59,
+        tzinfo=UTC,
+    )
     pit_frame, pit_summary = _validate_pit(pit_frame, as_of=as_of)
     pit_path = config.out_dir / "visible_kline_daily_pit.parquet"
     pit_frame.write_parquet(pit_path)
@@ -141,11 +155,13 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
     _write_signal_artifacts(config.out_dir, signal_frame, artifact_level=config.artifact_level)
 
     ledger_results = _run_ledger_backtests(config, pit_frame, signal_frame)
-    for symbol, result in ledger_results.items():
-        write_backtest_artifacts(result, config.out_dir / "backtest" / symbol)
+    if config.artifact_level == "full":
+        for symbol, result in ledger_results.items():
+            write_backtest_artifacts(result, config.out_dir / "backtest" / symbol)
     if ledger_results:
         first_symbol = sorted(ledger_results)[0]
         write_backtest_artifacts(ledger_results[first_symbol], config.out_dir / "backtest")
+    write_backtest_tables(ledger_results, config.out_dir)
     _write_scan_results(
         config.out_dir,
         config.symbols,
@@ -210,14 +226,14 @@ def _resolve_input_parquet(config: PipelineConfig) -> Path:
 def _materialize_pit_input(config: PipelineConfig, source_path: Path) -> tuple[Path, pl.DataFrame]:
     frame = pl.read_parquet(source_path)
     if {"symbol", "event_time", "available_at", "source_updated_at"}.issubset(set(frame.columns)):
-        return source_path, frame
+        return source_path, _merge_optional_pit_layers(config, frame)
     if {"code", "market", "date", "open", "high", "low", "close", "volume", "amount"}.issubset(
         set(frame.columns)
     ):
         normalized = _normalize_legacy_kline(frame, config.symbols)
         path = config.out_dir / "normalized_kline_daily_pit.parquet"
         normalized.write_parquet(path)
-        return path, normalized
+        return path, _merge_optional_pit_layers(config, normalized)
     return source_path, frame
 
 
@@ -279,13 +295,14 @@ def _calculate_factor_frame(
         raise ValueError("A-share factor pipeline requires close")
     time_col = _time_column(pit_frame)
     frame = pit_frame.sort(["symbol", time_col])
+    price_column = "adjusted_close" if "adjusted_close" in frame.columns else "close"
     expressions = []
     if "momentum_20d" in factor_names:
         expressions.append(
-            (pl.col("close") / pl.col("close").shift(20) - 1).over("symbol").alias("momentum_20d")
+            (pl.col(price_column) / pl.col(price_column).shift(20) - 1).over("symbol").alias("momentum_20d")
         )
     if "volatility_20d" in factor_names:
-        expressions.append(pl.col("close").pct_change().rolling_std(20).over("symbol").alias("volatility_20d"))
+        expressions.append(pl.col(price_column).pct_change().rolling_std(20).over("symbol").alias("volatility_20d"))
     if "turnover_pressure_20d" in factor_names:
         if "volume" not in frame.columns or "amount" not in frame.columns:
             raise ValueError("turnover_pressure_20d requires volume and amount")
@@ -566,6 +583,9 @@ def _write_fixture_parquet(config: PipelineConfig) -> Path:
                     "is_st": False,
                     "limit_up": False,
                     "limit_down": False,
+                    "listed_days": idx + 1,
+                    "is_tradable": True,
+                    "reason": "fixture tradable",
                 }
             )
     path = config.out_dir / "input_fixture.parquet"
@@ -606,6 +626,87 @@ def _normalize_legacy_kline(frame: pl.DataFrame, symbols: tuple[str, ...]) -> pl
     if not rows:
         raise ValueError(f"legacy kline input contains none of the requested symbols: {symbols}")
     return pl.DataFrame(rows)
+
+
+def _merge_optional_pit_layers(config: PipelineConfig, frame: pl.DataFrame) -> pl.DataFrame:
+    if config.data_root is None:
+        return _with_adjusted_prices(frame, None)
+    status_path = resolve_tradability_status_parquet(config.data_root)
+    if status_path is not None:
+        frame = _merge_latest_by_symbol_event(frame, pl.read_parquet(status_path), _TRADABILITY_COLUMNS)
+    adjustment_path = resolve_adjustment_factor_parquet(config.data_root)
+    return _with_adjusted_prices(frame, adjustment_path)
+
+
+_TRADABILITY_COLUMNS = (
+    "is_st",
+    "is_suspended",
+    "limit_up",
+    "limit_down",
+    "listed_days",
+    "is_tradable",
+    "reason",
+)
+
+
+def _merge_latest_by_symbol_event(
+    frame: pl.DataFrame,
+    pit_layer: pl.DataFrame,
+    value_columns: tuple[str, ...],
+) -> pl.DataFrame:
+    if pit_layer.is_empty():
+        return frame
+    wanted = ["symbol", "event_time", "available_at", *value_columns]
+    layer = pit_layer.select([column for column in wanted if column in pit_layer.columns]).rename(
+        {"available_at": "status_available_at"}
+    )
+    joined = frame.join_asof(
+        layer.sort(["symbol", "event_time"]),
+        on="event_time",
+        by="symbol",
+        strategy="backward",
+        check_sortedness=False,
+    )
+    if "status_available_at" in joined.columns:
+        joined = joined.with_columns(
+            pl.when(pl.col("status_available_at") <= pl.col("available_at"))
+            .then(pl.col(column))
+            .otherwise(None)
+            .alias(column)
+            for column in value_columns
+            if column in joined.columns
+        ).drop("status_available_at")
+    return joined
+
+
+def _with_adjusted_prices(frame: pl.DataFrame, adjustment_path: Path | None) -> pl.DataFrame:
+    if adjustment_path is None:
+        return frame
+    factors = pl.read_parquet(adjustment_path)
+    if factors.is_empty():
+        return frame
+    layer = factors.select(
+        [column for column in ("symbol", "event_time", "available_at", "factor") if column in factors.columns]
+    ).rename({"available_at": "factor_available_at", "factor": "adjustment_factor"})
+    joined = frame.join_asof(
+        layer.sort(["symbol", "event_time"]),
+        on="event_time",
+        by="symbol",
+        strategy="backward",
+        check_sortedness=False,
+    )
+    if "adjustment_factor" not in joined.columns:
+        return frame
+    return joined.with_columns(
+        pl.when(pl.col("factor_available_at") <= pl.col("available_at"))
+        .then(pl.col("adjustment_factor"))
+        .otherwise(None)
+        .fill_null(1.0)
+        .alias("adjustment_factor")
+    ).with_columns(
+        (pl.col("close") * pl.col("adjustment_factor")).alias("adjusted_close"),
+        pl.col("close").alias("raw_close"),
+    ).drop("factor_available_at")
 
 
 def _legacy_symbol(code: object, market: object) -> str:

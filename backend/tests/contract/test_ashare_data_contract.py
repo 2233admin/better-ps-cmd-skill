@@ -49,6 +49,26 @@ def test_complete_price_bar_pit_contract_passes():
     assert result.missing_columns == ()
 
 
+def test_tradability_status_contract_requires_execution_reality_columns():
+    from app.research.ashare_data_contract import ASharePITDataset, validate_pit_columns
+
+    result = validate_pit_columns(
+        ASharePITDataset.TRADABILITY_STATUS,
+        {"symbol", "event_time", "available_at", "source_updated_at", "is_st"},
+    )
+
+    assert not result.passed
+    assert {
+        "market",
+        "is_suspended",
+        "limit_up",
+        "limit_down",
+        "listed_days",
+        "is_tradable",
+        "reason",
+    }.issubset(set(result.missing_columns))
+
+
 def test_blocked_dataset_rejected_until_available_at_exists():
     from app.research.ashare_data_contract import require_pit_dataset
 

@@ -103,24 +103,28 @@ volume
 amount
 ```
 
-`ashare.instrument_status_pit`
+`ashare.tradability_status_pit`
 
 ```text
 symbol
+market
 event_time
 available_at
 source_updated_at
-is_trading
 is_st
 is_suspended
 limit_up
 limit_down
+listed_days
+is_tradable
+reason
 ```
 
 `ashare.adjustment_factor_pit`
 
 ```text
 symbol
+market
 event_time
 available_at
 source_updated_at

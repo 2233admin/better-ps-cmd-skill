@@ -8,7 +8,7 @@ from typing import Any
 
 import polars as pl
 
-from app.research.ashare_data_contract import PRICE_BAR_COLUMNS
+from app.research.ashare_data_contract import PRICE_BAR_COLUMNS, TRADABILITY_STATUS_COLUMNS
 
 
 LEGACY_KLINE_COLUMNS = frozenset(
@@ -71,6 +71,28 @@ def resolve_kline_daily_symbols(data_root: Path) -> tuple[str, ...]:
     return symbols
 
 
+def resolve_tradability_status_parquet(data_root: Path) -> Path | None:
+    """Find an optional tradability-status PIT parquet under a data lake root."""
+
+    candidates = _dataset_candidates(data_root, {"ashare.tradability_status_pit", "ashare.instrument_status_pit"})
+    candidates.extend(_glob_dataset_candidates(data_root, ("*tradability*status*.parquet", "*instrument*status*.parquet")))
+    for candidate in candidates:
+        if _has_columns(candidate, TRADABILITY_STATUS_COLUMNS):
+            return candidate
+    return None
+
+
+def resolve_adjustment_factor_parquet(data_root: Path) -> Path | None:
+    """Find an optional adjustment-factor PIT parquet under a data lake root."""
+
+    candidates = _dataset_candidates(data_root, {"ashare.adjustment_factor_pit"})
+    candidates.extend(_glob_dataset_candidates(data_root, ("*adjustment*factor*.parquet", "*adj*factor*.parquet")))
+    for candidate in candidates:
+        if _has_columns(candidate, {"symbol", "event_time", "available_at", "source_updated_at", "factor"}):
+            return candidate
+    return None
+
+
 def _manifest_candidates(data_root: Path) -> list[Path]:
     manifest = data_root / "_manifest" / "coverage.json"
     if not manifest.exists():
@@ -88,6 +110,22 @@ def _manifest_candidates(data_root: Path) -> list[Path]:
         if path is None:
             continue
         candidates.append(path if path.is_absolute() else data_root / path)
+    return candidates
+
+
+def _dataset_candidates(data_root: Path, datasets: set[str]) -> list[Path]:
+    manifest = data_root / "_manifest" / "coverage.json"
+    if not manifest.exists():
+        return []
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    entries = payload.get("items", payload.get("entries", [])) if isinstance(payload, dict) else payload
+    candidates: list[Path] = []
+    for item in entries:
+        if not isinstance(item, dict) or str(item.get("dataset", "")) not in datasets:
+            continue
+        path = _entry_path(item)
+        if path is not None:
+            candidates.append(path if path.is_absolute() else data_root / path)
     return candidates
 
 
@@ -137,6 +175,20 @@ def _glob_candidates(data_root: Path) -> list[Path]:
     return candidates
 
 
+def _glob_dataset_candidates(data_root: Path, patterns: tuple[str, ...]) -> list[Path]:
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    if not data_root.exists():
+        return candidates
+    for pattern in patterns:
+        for path in data_root.rglob(pattern):
+            if path in seen or "_manifest" in path.parts:
+                continue
+            seen.add(path)
+            candidates.append(path)
+    return candidates
+
+
 def _is_usable_daily_parquet(path: Path, symbols: tuple[str, ...]) -> bool:
     if not path.exists() or path.suffix.lower() != ".parquet":
         return False
@@ -150,3 +202,13 @@ def _is_usable_daily_parquet(path: Path, symbols: tuple[str, ...]) -> bool:
     if not LEGACY_KLINE_COLUMNS.issubset(columns):
         return False
     return True
+
+
+def _has_columns(path: Path, columns: set[str] | frozenset[str]) -> bool:
+    if not path.exists() or path.suffix.lower() != ".parquet":
+        return False
+    try:
+        frame = pl.read_parquet(path, n_rows=1)
+    except Exception:
+        return False
+    return set(columns).issubset(frame.columns)

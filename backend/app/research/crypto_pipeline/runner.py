@@ -16,6 +16,7 @@ from app.research.backtest import (
     CryptoLedgerBacktester,
     LedgerBacktestResult,
     write_backtest_artifacts,
+    write_backtest_tables,
 )
 from app.research.crypto_data_contract import CryptoPITDataset, validate_crypto_pit_columns
 from app.research.crypto_pipeline.control import (
@@ -33,6 +34,7 @@ from app.research.crypto_pipeline.factors import (
     generate_crypto_signals,
     ledger_signal_frame,
 )
+from app.research.crypto_pipeline.reconciliation import reconcile_crypto_paper
 from app.research.manifest import (
     ArtifactKind,
     DataArtifact,
@@ -92,6 +94,12 @@ def run_crypto_pipeline(config: CryptoPipelineConfig) -> CryptoPipelineResult:
     dataset_version = _write_snapshot(config, pit_path, pit_frame, as_of)
     factors, signals = _run_factors_and_signals(config, pit_frame, as_of)
     ledger_results = _run_backtests(config, pit_frame, signals)
+    paper_reconciliation = reconcile_crypto_paper(
+        signals,
+        pit_frame,
+        position_notional=config.initial_capital * config.position_cap,
+        max_notional=config.initial_capital * config.position_cap,
+    )
 
     manifest = ExperimentManifest(
         experiment_id=f"crypto-exp-{uuid4().hex}",
@@ -99,9 +107,12 @@ def run_crypto_pipeline(config: CryptoPipelineConfig) -> CryptoPipelineResult:
         code_commit=config.code_commit,
         data_versions=(dataset_version,),
         factor_versions=(
-            "momentum_20:v1",
-            "volatility_20:v1",
-            "funding_pressure:v1",
+            "funding_annualized:v1",
+            "mark_index_basis:v1",
+            "perp_spot_basis:v1",
+            "open_interest_change:v1",
+            "liquidity_score:v1",
+            "volatility_regime:v1",
         ),
         config_hash=sha256_json(
             {
@@ -118,12 +129,16 @@ def run_crypto_pipeline(config: CryptoPipelineConfig) -> CryptoPipelineResult:
     manifest_hash = manifest.manifest_hash()
     _write_json(config.out_dir / "manifest.json", manifest.to_payload() | {"manifest_hash": manifest_hash})
     _write_json(config.out_dir / "factors.json", [asdict(item) for item in factors])
+    _write_json(config.out_dir / "factor_snapshot.json", [asdict(item) for item in factors])
     _write_json(config.out_dir / "signals.json", [asdict(item) for item in signals])
+    _write_json(config.out_dir / "trade_intents.json", [asdict(item) for item in signals])
+    _write_json(config.out_dir / "paper_reconciliation.json", paper_reconciliation.to_payload())
     for inst_id, result in ledger_results.items():
         write_backtest_artifacts(result, config.out_dir / "backtest" / inst_id)
     if ledger_results:
         first_inst = sorted(ledger_results)[0]
         write_backtest_artifacts(ledger_results[first_inst], config.out_dir / "backtest")
+        write_backtest_tables(ledger_results, config.out_dir / "portfolio")
     control_report = evaluate_control(
         config=ControlConfig(
             market_type=config.market_type,
@@ -144,6 +159,7 @@ def run_crypto_pipeline(config: CryptoPipelineConfig) -> CryptoPipelineResult:
         dataset_version,
         ledger_results,
         signals,
+        paper_reconciliation.to_payload(),
         control_report,
     )
     return CryptoPipelineResult(
@@ -170,6 +186,14 @@ def _materialize_kline_pit(config: CryptoPipelineConfig, source_path: Path) -> t
         frame = frame.with_columns(pl.lit(0.0).alias("funding_rate"))
     if "funding_time" not in frame.columns:
         frame = frame.with_columns(pl.col("event_time").alias("funding_time"))
+    if "mark_price" not in frame.columns:
+        frame = frame.with_columns(pl.col("close").alias("mark_price"))
+    if "index_price" not in frame.columns:
+        frame = frame.with_columns(pl.col("close").alias("index_price"))
+    if "open_interest" not in frame.columns:
+        frame = frame.with_columns(pl.lit(None, dtype=pl.Float64).alias("open_interest"))
+    if "open_interest_ccy" not in frame.columns:
+        frame = frame.with_columns(pl.lit(None, dtype=pl.Float64).alias("open_interest_ccy"))
 
     kline_check = validate_crypto_pit_columns(CryptoPITDataset.KLINE, frame.columns)
     if not kline_check.passed:
@@ -178,6 +202,14 @@ def _materialize_kline_pit(config: CryptoPipelineConfig, source_path: Path) -> t
     if not funding_check.passed:
         raise ValueError(
             f"crypto.funding_rate_pit is missing PIT columns: {', '.join(funding_check.missing_columns)}"
+        )
+    mark_check = validate_crypto_pit_columns(CryptoPITDataset.MARK_PRICE, frame.columns)
+    if not mark_check.passed:
+        raise ValueError(f"crypto.mark_price_pit is missing PIT columns: {', '.join(mark_check.missing_columns)}")
+    oi_check = validate_crypto_pit_columns(CryptoPITDataset.OPEN_INTEREST, frame.columns)
+    if not oi_check.passed:
+        raise ValueError(
+            f"crypto.open_interest_pit is missing PIT columns: {', '.join(oi_check.missing_columns)}"
         )
     path = source_path if source_path.name.endswith("_pit.parquet") else config.out_dir / "crypto_kline_pit.parquet"
     return path, frame, has_funding_evidence
@@ -301,6 +333,7 @@ def _write_session_package(
     dataset_version: DatasetVersion,
     ledger_results: dict[str, LedgerBacktestResult],
     signals: tuple[CryptoSignal, ...],
+    paper_reconciliation: dict,
     control_report: ControlReport,
 ) -> Path:
     out_dir = config.out_dir / "session_package"
@@ -320,10 +353,13 @@ def _write_session_package(
         "evidence_level": control_report.evidence_level,
         "assumptions": assumptions,
         "signals": len(signals),
+        "paper_reconciliation": paper_reconciliation,
         "backtests": {key: value.metrics() for key, value in ledger_results.items()},
     }
     _write_json(out_dir / "audit.json", audit)
     _write_json(out_dir / "signals.json", [asdict(item) for item in signals])
+    _write_json(out_dir / "trade_intents.json", [asdict(item) for item in signals])
+    _write_json(out_dir / "paper_reconciliation.json", paper_reconciliation)
     _write_json(out_dir / "control_report.json", asdict(control_report))
     _write_control_markdown(out_dir / "control_report.md", control_report)
     lines = [
@@ -392,6 +428,11 @@ def _write_fixture_parquet(config: CryptoPipelineConfig) -> Path:
                     "quote_volume": (1000.0 + idx) * close,
                     "funding_rate": 0.0001 if config.market_type == "swap" else 0.0,
                     "funding_time": current,
+                    "mark_price": close * (1.0002 if config.market_type == "swap" else 1.0),
+                    "index_price": close,
+                    "spot_close": close * 0.9998,
+                    "open_interest": 10_000.0 + idx if config.market_type == "swap" else None,
+                    "open_interest_ccy": 10_000.0 + idx if config.market_type == "swap" else None,
                 }
             )
     path = config.out_dir / "crypto_input_fixture.parquet"

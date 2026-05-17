@@ -42,10 +42,28 @@ Swap research additionally needs point-in-time funding and reference prices:
 - `crypto.funding_rate_pit`
 - `crypto.open_interest_pit`
 - `crypto.mark_price_pit`
+- `crypto.index_price_pit`
 
 Funding, open interest, mark price, and index price are not optional evidence
 for leveraged perpetual strategies. A swap backtest without funding is only a
 smoke test, not strategy evidence.
+
+## Funding/Basis Research Path
+
+The first crypto alpha path is funding and basis capture, not grid bots or
+generic momentum. Research consumes normalized PIT rows and emits trade
+intents. The initial factor family is:
+
+- funding annualized level
+- mark-index basis
+- perp-spot basis
+- open-interest change
+- volume/liquidity filter
+- volatility regime
+
+Research artifacts must include `factor_snapshot.json`, `trade_intents.json`,
+portfolio `orders/fills/positions/equity_curve` tables, and
+`paper_reconciliation.json`.
 
 ## Control Report
 
@@ -67,3 +85,7 @@ Research and backtest may produce crypto candidates. Real OKX orders remain
 behind `KATANA_TRADING_MODE=live_test`,
 `KATANA_ENABLE_CRYPTO_LIVE_TEST=1`, `KATANA_OKX_MAX_ORDER_USDT`, and
 `KATANA_OKX_ALLOWED_PAIRS`.
+
+Paper reconciliation must pass before a candidate is eligible for live_test:
+intent -> accepted/rejected -> fill -> cash/position. Reconciliation failures
+stay in `paper` and must not call an exchange client.

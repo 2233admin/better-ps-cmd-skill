@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "default_decision": "reject",
+  "allowed_roles": [
+    "market_data_sdk",
+    "exchange_rest_sdk",
+    "exchange_websocket_sdk",
+    "indicator_library",
+    "serialization_or_transport"
+  ],
+  "reference_only_roles": [
+    "strategy_framework",
+    "backtest_framework",
+    "grid_bot",
+    "arbitrage_bot",
+    "portfolio_optimizer"
+  ],
+  "banned_capabilities": [
+    "custodies_private_keys",
+    "places_orders_without_katana_intent",
+    "stores_exchange_credentials",
+    "bypasses_live_test_gate",
+    "imports_from_research_pipeline",
+    "requires_cloud_account",
+    "closed_source_core",
+    "unbounded_auto_trading"
+  ],
+  "required_checks": [
+    "license_declared",
+    "maintenance_recent_enough",
+    "tests_or_contract_examples_present",
+    "api_surface_small_enough",
+    "no_secret_storage",
+    "no_direct_order_path_from_research",
+    "pit_normalization_defined",
+    "paper_or_sim_mode_supported"
+  ],
+  "admissions": [
+    {
+      "name": "requests",
+      "role": "serialization_or_transport",
+      "decision": "allow",
+      "scope": "HTTP transport used by existing OKX client; not a trading bot or strategy framework.",
+      "constraints": [
+        "No order submission outside OKXBridge.live_test gate",
+        "No credential persistence"
+      ]
+    },
+    {
+      "name": "httpx",
+      "role": "serialization_or_transport",
+      "decision": "allow",
+      "scope": "HTTP transport for API clients and tests.",
+      "constraints": [
+        "No exchange-specific order path unless wrapped by an adapter gate"
+      ]
+    },
+    {
+      "name": "websockets",
+      "role": "exchange_websocket_sdk",
+      "decision": "allow",
+      "scope": "Streaming market data transport only.",
+      "constraints": [
+        "Market data must normalize into crypto PIT rows before research use"
+      ]
+    },
+    {
+      "name": "ccxt",
+      "role": "exchange_rest_sdk",
+      "decision": "candidate",
+      "scope": "Optional future multi-exchange market data adapter.",
+      "constraints": [
+        "Read-only until OKX L3 sim reconciliation is stable",
+        "No private order methods exposed to research",
+        "All outputs must pass crypto PIT contracts"
+      ]
+    },
+    {
+      "name": "freqtrade",
+      "role": "strategy_framework",
+      "decision": "reference_only",
+      "scope": "May be read for operational ideas; must not become the runtime strategy engine.",
+      "constraints": [
+        "Do not import into production code",
+        "Do not reuse live execution layer"
+      ]
+    },
+    {
+      "name": "hummingbot",
+      "role": "arbitrage_bot",
+      "decision": "reference_only",
+      "scope": "May be read for connector and market-making patterns.",
+      "constraints": [
+        "Do not import into production code",
+        "Do not reuse custody or live execution layer"
+      ]
+    }
+  ]
+}

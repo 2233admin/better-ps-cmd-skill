@@ -9,7 +9,7 @@ ASHARE_DATA_ROOT="${ASHARE_DATA_ROOT:-/srv/lan-ai/data/ashare}"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/test-katana.sh [unit|arch|crypto|crypto-smoke|crypto-pipeline|ashare|frontend|all]
+Usage: scripts/test-katana.sh [unit|arch|crypto|crypto-smoke|crypto-pipeline|ashare|ashare-lake|ashare-world|ashare-pipeline-smoke|ashare-benchmark|ashare-control|frontend|all]
 
 unit      Compile core backend entry points and run backend unit/contract tests.
 arch      Run sentrux architectural boundary checks.
@@ -18,7 +18,17 @@ crypto-smoke
           Run OKX comprehensive smoke and verify stdout is valid JSON.
 crypto-pipeline
           Run the fixture-backed crypto PIT research pipeline.
-ashare    Verify the A-share lake coverage manifest can be read.
+ashare    Alias for ashare-lake.
+ashare-lake
+          Verify A-share lake validation, coverage, and calendar manifests.
+ashare-world
+          Build a PIT-safe world snapshot from the A-share lake.
+ashare-pipeline-smoke
+          Run the A-share research pipeline against fixture or lake data.
+ashare-benchmark
+          Run A-share benchmark when KATANA_RUN_FULL_ASHARE_BENCHMARK=1, otherwise fixture smoke.
+ashare-control
+          Run the unified A-share control plane.
 frontend  Build the Next.js frontend when node_modules is installed.
 all       Run unit + arch + crypto + ashare. Frontend stays explicit.
 USAGE
@@ -77,9 +87,11 @@ unit() {
     app/research/crypto_pipeline/runner.py \
     app/research/pipeline/__init__.py \
     app/research/pipeline/cli.py \
+    app/research/pipeline/benchmark.py \
     app/research/pipeline/control.py \
     app/research/pipeline/data_lake.py \
     app/research/pipeline/runner.py \
+    app/research/pipeline/world_snapshot.py \
     app/research/snapshot.py \
     app/trading/executor.py \
     app/trading/intent.py \
@@ -90,6 +102,7 @@ unit() {
     run_okx_comprehensive.py
   uv_python -m py_compile \
     ../scripts/ingest-ashare-bridge.py \
+    ../scripts/ingest-ashare-incremental.py \
     ../scripts/validate-ashare-lake.py \
     ../scripts/build-ashare-coverage.py \
     ../scripts/build-ashare-calendar.py
@@ -146,7 +159,7 @@ crypto() {
   crypto_pipeline
 }
 
-ashare() {
+ashare_lake() {
   require_uv
   local manifest="$ASHARE_DATA_ROOT/_manifest/coverage.json"
   local calendar_manifest="$ASHARE_DATA_ROOT/_manifest/trading_calendar.json"
@@ -188,6 +201,74 @@ print(f"ashare trading calendar OK: {payload.get('row_count')} rows from {manife
 PY
 }
 
+ashare_world() {
+  require_uv
+  cd "$BACKEND"
+  local out_dir
+  out_dir="$(mktemp -d)"
+  uv_python -m app.research.pipeline.world_snapshot \
+    --date "${KATANA_ASHARE_DATE:-2026-05-17}" \
+    --data-root "$ASHARE_DATA_ROOT" \
+    --out "$out_dir"
+  test -f "$out_dir/world_snapshot.parquet"
+  test -f "$out_dir/manifest.json"
+  echo "ashare world snapshot OK: $out_dir"
+}
+
+ashare_pipeline_smoke() {
+  require_uv
+  cd "$BACKEND"
+  local out_dir
+  out_dir="$(mktemp -d)"
+  uv_python -m app.research.pipeline.cli \
+    --date "${KATANA_ASHARE_DATE:-2026-05-17}" \
+    --symbols "${KATANA_ASHARE_SYMBOLS:-600000.SH,000001.SZ}" \
+    --out "$out_dir" \
+    --code-commit "${KATANA_CODE_COMMIT:-manual}"
+  test -f "$out_dir/backtest_summary.parquet"
+  test -f "$out_dir/scan_results.parquet"
+  test -f "$out_dir/morning_package/control_report.json"
+  echo "ashare pipeline smoke OK: $out_dir"
+}
+
+ashare_benchmark() {
+  require_uv
+  cd "$BACKEND"
+  local out_dir
+  out_dir="$(mktemp -d)"
+  if [[ "${KATANA_RUN_FULL_ASHARE_BENCHMARK:-0}" == "1" ]]; then
+    uv_python -m app.research.pipeline.benchmark \
+      --date "${KATANA_ASHARE_DATE:-2026-05-17}" \
+      --data-root "$ASHARE_DATA_ROOT" \
+      --out "$out_dir" \
+      --code-commit "${KATANA_CODE_COMMIT:-manual}"
+  else
+    uv_python -m app.research.pipeline.benchmark \
+      --date "${KATANA_ASHARE_DATE:-2026-05-17}" \
+      --data-root "$ASHARE_DATA_ROOT" \
+      --symbols "${KATANA_ASHARE_SYMBOLS:-600000.SH,000001.SZ}" \
+      --out "$out_dir" \
+      --code-commit "${KATANA_CODE_COMMIT:-manual}"
+  fi
+  test -f "$out_dir/benchmark.json"
+  test -f "$out_dir/benchmark.csv"
+  test -f "$out_dir/control_report.compact.json"
+  echo "ashare benchmark OK: $out_dir"
+}
+
+ashare_control() {
+  require_uv
+  pwsh -NoProfile -File "$ROOT/scripts/run-ashare-control-plane.ps1" \
+    -LakeRoot "$ASHARE_DATA_ROOT" \
+    -Date "${KATANA_ASHARE_DATE:-2026-05-17}" \
+    -OutRoot "${KATANA_ASHARE_CONTROL_OUT:-$(mktemp -d)}" \
+    -Mode all
+}
+
+ashare() {
+  ashare_lake
+}
+
 frontend() {
   cd "$ROOT/frontend"
   if [[ ! -d node_modules ]]; then
@@ -205,6 +286,11 @@ case "$target" in
   crypto-smoke) crypto_smoke ;;
   crypto-pipeline) crypto_pipeline ;;
   ashare) ashare ;;
+  ashare-lake) ashare_lake ;;
+  ashare-world) ashare_world ;;
+  ashare-pipeline-smoke) ashare_pipeline_smoke ;;
+  ashare-benchmark) ashare_benchmark ;;
+  ashare-control) ashare_control ;;
   frontend) frontend ;;
   all)
     unit

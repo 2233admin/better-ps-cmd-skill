@@ -15,6 +15,7 @@ class DatasetTier(str, Enum):
 class ASharePITDataset(str, Enum):
     KLINE_DAILY = "ashare.kline_daily_pit"
     KLINE_MINUTE = "ashare.kline_minute_pit"
+    TRADABILITY_STATUS = "ashare.tradability_status_pit"
     INSTRUMENT_STATUS = "ashare.instrument_status_pit"
     ADJUSTMENT_FACTOR = "ashare.adjustment_factor_pit"
 
@@ -56,23 +57,27 @@ PRICE_BAR_COLUMNS = frozenset(
     }
 )
 
-INSTRUMENT_STATUS_COLUMNS = frozenset(
+TRADABILITY_STATUS_COLUMNS = frozenset(
     {
         "symbol",
+        "market",
         "event_time",
         "available_at",
         "source_updated_at",
-        "is_trading",
         "is_st",
         "is_suspended",
         "limit_up",
         "limit_down",
+        "listed_days",
+        "is_tradable",
+        "reason",
     }
 )
 
 ADJUSTMENT_FACTOR_COLUMNS = frozenset(
     {
         "symbol",
+        "market",
         "event_time",
         "available_at",
         "source_updated_at",
@@ -84,7 +89,8 @@ ADJUSTMENT_FACTOR_COLUMNS = frozenset(
 REQUIRED_COLUMNS_BY_DATASET = {
     ASharePITDataset.KLINE_DAILY: PRICE_BAR_COLUMNS,
     ASharePITDataset.KLINE_MINUTE: PRICE_BAR_COLUMNS,
-    ASharePITDataset.INSTRUMENT_STATUS: INSTRUMENT_STATUS_COLUMNS,
+    ASharePITDataset.TRADABILITY_STATUS: TRADABILITY_STATUS_COLUMNS,
+    ASharePITDataset.INSTRUMENT_STATUS: TRADABILITY_STATUS_COLUMNS,
     ASharePITDataset.ADJUSTMENT_FACTOR: ADJUSTMENT_FACTOR_COLUMNS,
 }
 

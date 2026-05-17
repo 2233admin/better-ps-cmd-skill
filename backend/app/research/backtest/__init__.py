@@ -13,7 +13,7 @@ from .models import (
     OrderRecord,
     TradeRecord,
 )
-from .renderers import write_backtest_artifacts
+from .renderers import write_backtest_artifacts, write_backtest_tables
 
 __all__ = [
     "AShareBacktestConfig",
@@ -26,4 +26,5 @@ __all__ = [
     "OrderRecord",
     "TradeRecord",
     "write_backtest_artifacts",
+    "write_backtest_tables",
 ]

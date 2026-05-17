@@ -13,6 +13,7 @@ class CryptoPITDataset(str, Enum):
     FUNDING_RATE = "crypto.funding_rate_pit"
     OPEN_INTEREST = "crypto.open_interest_pit"
     MARK_PRICE = "crypto.mark_price_pit"
+    INDEX_PRICE = "crypto.index_price_pit"
 
 
 class CryptoMarketType(str, Enum):
@@ -84,11 +85,24 @@ MARK_PRICE_COLUMNS = frozenset(
     }
 )
 
+INDEX_PRICE_COLUMNS = frozenset(
+    {
+        "inst_id",
+        "venue",
+        "market_type",
+        "event_time",
+        "available_at",
+        "source_updated_at",
+        "index_price",
+    }
+)
+
 REQUIRED_COLUMNS_BY_DATASET = {
     CryptoPITDataset.KLINE: KLINE_COLUMNS,
     CryptoPITDataset.FUNDING_RATE: FUNDING_RATE_COLUMNS,
     CryptoPITDataset.OPEN_INTEREST: OPEN_INTEREST_COLUMNS,
     CryptoPITDataset.MARK_PRICE: MARK_PRICE_COLUMNS,
+    CryptoPITDataset.INDEX_PRICE: INDEX_PRICE_COLUMNS,
 }
 
 

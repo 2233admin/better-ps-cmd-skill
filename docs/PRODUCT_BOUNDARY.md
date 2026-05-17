@@ -54,6 +54,11 @@ KATANA_OKX_ALLOWED_PAIRS=BTC-USDT,ETH-USDT
 If any value is missing, malformed, or violated, the OKX adapter must reject the
 order before calling the OKX client.
 
+External crypto GitHub repositories and packages must pass the admission policy
+in `CRYPTO_WHEEL_ADMISSION.json` before runtime use. Unknown wheels are rejected
+by default; strategy/bot frameworks are reference-only unless separately
+promoted by an architecture decision.
+
 ## A-Share Execution Boundary
 
 A-share execution defaults to manual review:

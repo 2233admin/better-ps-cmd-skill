@@ -8,6 +8,7 @@ from loguru import logger
 
 from ....data.okx_client import OKXClient, get_okx_client
 from ...intent import TradingMode, get_trading_mode
+from ..crypto import CryptoOrderIntent, CryptoOrderResult
 
 
 class OKXBridge:
@@ -50,7 +51,7 @@ class OKXBridge:
     def _td_mode(self) -> str:
         return "cross" if self.trade_mode == "swap" else "cash"
 
-    def _live_test_rejection(self, code: str, price: float, volume: int) -> str | None:
+    def _live_test_rejection(self, code: str, price: float, volume: float) -> str | None:
         if get_trading_mode() != TradingMode.LIVE_TEST:
             return "OKX live_test rejected: KATANA_TRADING_MODE must be live_test"
         if os.environ.get("KATANA_ENABLE_CRYPTO_LIVE_TEST") != "1":
@@ -70,7 +71,7 @@ class OKXBridge:
         except (KeyError, ValueError):
             return "OKX live_test rejected: KATANA_OKX_MAX_ORDER_USDT must be numeric"
 
-        notional = price * volume
+        notional = price * float(volume)
         if notional > max_order_usdt:
             return (
                 "OKX live_test rejected: order notional "
@@ -90,7 +91,51 @@ class OKXBridge:
             return {"error": rejection}
         return self._place_limit(code, "sell", price, volume)
 
-    def _place_limit(self, code: str, side: str, price: float, volume: int) -> dict:
+    def submit_intent(self, intent: CryptoOrderIntent) -> CryptoOrderResult:
+        if intent.dry_run:
+            return CryptoOrderResult(
+                request_id=intent.request_id,
+                status="accepted",
+                inst_id=intent.inst_id,
+                side=intent.side,
+                reason="dry_run",
+            )
+        rejection = self._live_test_rejection(
+                intent.inst_id,
+                intent.limit_price,
+                intent.qty,
+        )
+        if rejection:
+            return CryptoOrderResult(
+                request_id=intent.request_id,
+                status="rejected",
+                inst_id=intent.inst_id,
+                side=intent.side,
+                reason=rejection,
+            )
+        result = self._place_limit(
+            intent.inst_id,
+            intent.side,
+            intent.limit_price,
+            intent.qty,
+        )
+        if "error" in result:
+            return CryptoOrderResult(
+                request_id=intent.request_id,
+                status="rejected",
+                inst_id=intent.inst_id,
+                side=intent.side,
+                reason=str(result["error"]),
+            )
+        return CryptoOrderResult(
+            request_id=intent.request_id,
+            status="submitted",
+            inst_id=str(result.get("inst_id", intent.inst_id)),
+            side=intent.side,
+            order_id=str(result.get("order_id", "")),
+        )
+
+    def _place_limit(self, code: str, side: str, price: float, volume: float) -> dict:
         inst_id = self._inst_id(code)
         result = self.client.place_order(
             inst_id=inst_id,

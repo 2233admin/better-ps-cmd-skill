@@ -41,6 +41,8 @@ class DailyLedgerRecord:
     total_equity: float
     daily_pnl: float
     drawdown: float
+    funding_cashflow: float = 0.0
+    margin_used: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -72,11 +74,15 @@ class LedgerBacktestResult:
     def metrics(self) -> dict[str, float]:
         wins = [trade for trade in self.trades if trade.pnl > 0]
         turnover = sum(fill.qty * fill.price for fill in self.fills) / self.initial_capital
+        funding_capture = sum(row.funding_cashflow for row in self.daily_ledger)
+        max_margin_used = max((row.margin_used for row in self.daily_ledger), default=0.0)
         return {
             "total_return": self.total_return,
             "max_drawdown": self.max_drawdown,
             "win_rate": len(wins) / len(self.trades) if self.trades else 0.0,
             "turnover": turnover,
+            "funding_capture": funding_capture,
+            "max_margin_used": max_margin_used,
             "trade_count": float(len(self.trades)),
             "final_equity": self.final_equity,
         }

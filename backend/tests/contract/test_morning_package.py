@@ -224,6 +224,36 @@ def test_easyxt_export_reuses_existing_trade_intent_contract_after_manual_confir
     ]
 
 
+def test_easyxt_sim_reconciliation_reports_pass_and_diffs():
+    from app.trading.adapters.qmt import reconcile_easyxt_sim
+
+    intents = [{"request_id": "intent-1", "symbol": "600000.SH", "qty": 100}]
+    passed = reconcile_easyxt_sim(
+        intents,
+        accepted=[{"request_id": "intent-1"}],
+        fills=[{"request_id": "intent-1", "qty": 100}],
+        expected_positions={"600000.SH": 100},
+        actual_positions={"600000.SH": 100},
+        expected_cash=99_000.0,
+        actual_cash=99_000.0,
+    )
+    failed = reconcile_easyxt_sim(
+        intents,
+        accepted=[],
+        rejected=[],
+        expected_positions={"600000.SH": 100},
+        actual_positions={"600000.SH": 0},
+        expected_cash=99_000.0,
+        actual_cash=100_000.0,
+    )
+
+    assert passed["decision"] == "pass"
+    assert passed["intent_count"] == 1
+    assert failed["decision"] == "fail"
+    assert failed["position_diff"] == {"600000.SH": -100.0}
+    assert failed["cash_diff"] == 1000.0
+
+
 def test_research_output_converts_to_morning_package_candidate_without_execution_imports():
     from app.research.agent import ResearchAgentRequest, ResearchAgentRunner
     from app.research.backtest import LedgerBacktestResult

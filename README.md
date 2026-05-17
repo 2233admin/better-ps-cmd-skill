@@ -11,6 +11,7 @@
 市场边界见：[Product Boundary](docs/PRODUCT_BOUNDARY.md)。
 研究层边界见：[Research Architecture](docs/RESEARCH_ARCHITECTURE.md)。
 A 股数据/PIT 规范见：[A-Share Data And PIT Specification](docs/ASHARE_DATA_PIT_SPEC.md)。
+A 股数据接入和控制面见：[Market Data Ingest](docs/market-data-ingest.md)。
 实验复现规范见：[Experiment Manifest Specification](docs/EXPERIMENT_MANIFEST_SPEC.md)。
 
 ## QMT Phase-1 Boundary
@@ -34,6 +35,13 @@ scripts/test-katana.sh all
 ```
 
 项目当前按两个主市场收口：数字货币和 A 股。期货、GPU 搜索和老宏观/Streamlit 入口已收进 `legacy/` 冷区，不进入默认测试门禁。目录边界见：[Project Structure](docs/PROJECT_STRUCTURE.md)。
+
+A 股研究控制面以 PIT parquet lake 为事实源，不以本地 DuckDB 为验收入口：
+
+```text
+TDX/Lake -> validate -> coverage -> calendar -> world_snapshot
+-> research pipeline -> benchmark -> gate_report
+```
 
 ```powershell
 cd C:\Users\Administrator\projects\k-atana\backend

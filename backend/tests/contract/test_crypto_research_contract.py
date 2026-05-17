@@ -19,6 +19,29 @@ def test_crypto_pit_spec_declares_24_7_and_swap_boundaries():
     assert "live_test" in text
 
 
+def test_crypto_wheel_admission_policy_defaults_unknown_wheels_to_reject():
+    from app.trading.adapters.crypto import load_wheel_admission_policy
+
+    policy = load_wheel_admission_policy()
+
+    assert policy.default_decision == "reject"
+    assert policy.decision_for("unknown-grid-bot") == "reject"
+    assert policy.decision_for("requests") == "allow"
+    assert policy.decision_for("ccxt") == "candidate"
+    assert policy.decision_for("freqtrade") == "reference_only"
+    assert "places_orders_without_katana_intent" in policy.banned_capabilities
+
+
+def test_runtime_crypto_wheel_import_requires_allow_decision():
+    from app.trading.adapters.crypto import load_wheel_admission_policy
+
+    policy = load_wheel_admission_policy()
+
+    policy.assert_allowed_for_runtime("requests")
+    with pytest.raises(ValueError, match="runtime imports require allow"):
+        policy.assert_allowed_for_runtime("freqtrade")
+
+
 def test_crypto_kline_contract_requires_visibility_and_market_type():
     from app.research.crypto_data_contract import CryptoPITDataset, validate_crypto_pit_columns
 
@@ -49,6 +72,69 @@ def test_complete_crypto_kline_contract_passes():
 
     assert result.passed
     assert result.missing_columns == ()
+
+
+def test_okx_candle_normalizer_outputs_crypto_kline_pit_schema():
+    from app.research.crypto_data_contract import CryptoPITDataset, validate_crypto_pit_columns
+    from app.trading.adapters.crypto import normalize_okx_candles
+
+    frame = normalize_okx_candles(
+        inst_id="BTC-USDT",
+        market_type="spot",
+        source_updated_at=datetime(2026, 5, 17, 12, tzinfo=UTC),
+        candles=[
+            [
+                "1779019200000",
+                "100.0",
+                "101.0",
+                "99.0",
+                "100.5",
+                "10.0",
+                "1000.0",
+                "1005.0",
+            ]
+        ],
+    )
+    result = validate_crypto_pit_columns(CryptoPITDataset.KLINE, frame.columns)
+
+    assert result.passed
+    assert frame["inst_id"].to_list() == ["BTC-USDT"]
+    assert frame["venue"].to_list() == ["okx"]
+    assert frame["quote_volume"].to_list() == [1005.0]
+
+
+def test_okx_swap_normalizers_output_required_pit_schemas():
+    from app.research.crypto_data_contract import CryptoPITDataset, validate_crypto_pit_columns
+    from app.trading.adapters.crypto import (
+        normalize_okx_funding_rates,
+        normalize_okx_mark_index_prices,
+        normalize_okx_open_interest,
+    )
+
+    source_updated_at = datetime(2026, 5, 17, 12, tzinfo=UTC)
+    funding = normalize_okx_funding_rates(
+        inst_id="BTC-USDT-SWAP",
+        source_updated_at=source_updated_at,
+        funding_rates=[{"instId": "BTC-USDT-SWAP", "fundingRate": "0.0001", "fundingTime": "1779019200000"}],
+    )
+    mark = normalize_okx_mark_index_prices(
+        inst_id="BTC-USDT-SWAP",
+        market_type="swap",
+        source_updated_at=source_updated_at,
+        prices=[{"instId": "BTC-USDT-SWAP", "markPx": "100.2", "idxPx": "100.0", "ts": "1779019200000"}],
+    )
+    oi = normalize_okx_open_interest(
+        inst_id="BTC-USDT-SWAP",
+        source_updated_at=source_updated_at,
+        open_interest=[{"instId": "BTC-USDT-SWAP", "oi": "10000", "oiCcy": "100", "ts": "1779019200000"}],
+    )
+
+    assert validate_crypto_pit_columns(CryptoPITDataset.FUNDING_RATE, funding.columns).passed
+    assert validate_crypto_pit_columns(CryptoPITDataset.MARK_PRICE, mark.columns).passed
+    assert validate_crypto_pit_columns(CryptoPITDataset.OPEN_INTEREST, oi.columns).passed
+    assert funding["market_type"].to_list() == ["swap"]
+    assert mark["mark_price"].to_list() == [100.2]
+    assert oi["open_interest"].to_list() == [10000.0]
 
 
 def test_crypto_rejects_unknown_pit_dataset():
@@ -123,15 +209,24 @@ def test_crypto_fixture_pipeline_generates_session_package(tmp_path):
     expected = [
         "manifest.json",
         "signals.json",
+        "trade_intents.json",
         "factors.json",
+        "factor_snapshot.json",
+        "paper_reconciliation.json",
         "backtest/orders.csv",
         "backtest/fills.csv",
         "backtest/daily_ledger.csv",
         "backtest/trades.csv",
         "backtest/metrics.json",
+        "portfolio/portfolio_orders.parquet",
+        "portfolio/portfolio_fills.parquet",
+        "portfolio/portfolio_positions.parquet",
+        "portfolio/portfolio_equity_curve.parquet",
         "session_package/session_package.md",
         "session_package/audit.json",
         "session_package/signals.json",
+        "session_package/trade_intents.json",
+        "session_package/paper_reconciliation.json",
         "session_package/control_report.json",
         "session_package/control_report.md",
     ]
@@ -141,6 +236,7 @@ def test_crypto_fixture_pipeline_generates_session_package(tmp_path):
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     signals = json.loads((out_dir / "signals.json").read_text(encoding="utf-8"))
     audit = json.loads((out_dir / "session_package" / "audit.json").read_text(encoding="utf-8"))
+    reconciliation = json.loads((out_dir / "paper_reconciliation.json").read_text(encoding="utf-8"))
 
     assert manifest["code_commit"] == "abc1234"
     assert manifest["data_versions"][0]["name"] == "crypto.kline_pit"
@@ -149,8 +245,27 @@ def test_crypto_fixture_pipeline_generates_session_package(tmp_path):
     assert audit["control_decision"] in {"promote", "observe", "reject", "halt"}
     assert audit["control_report_path"] == "control_report.json"
     assert audit["evidence_level"] == "fixture_smoke"
+    assert "paper_reconciliation" in audit
+    assert {"cash_diff", "position_diff", "fill_count", "reject_reasons"}.issubset(reconciliation)
     assert result.session_package_dir == out_dir / "session_package"
     assert result.control_report.manifest_hash == manifest["manifest_hash"]
+
+
+def test_crypto_funding_basis_factors_use_visible_rows_only():
+    from app.research.crypto_pipeline.factors import calculate_crypto_factors
+
+    frame = _crypto_bars([100.0, 100.5, 101.0], funding_rate=[0.001, 0.002, 0.999])
+    visible = frame.filter(pl.col("available_at") <= datetime(2026, 5, 17, 1, 1, tzinfo=UTC))
+    factors = calculate_crypto_factors(
+        visible.with_columns(
+            pl.col("close").alias("mark_price"),
+            pl.col("close").alias("index_price"),
+            pl.lit(10_000.0).alias("open_interest"),
+        )
+    )
+
+    assert factors.height == 2
+    assert factors["funding_annualized"].to_list() == [pytest.approx(1.095), pytest.approx(2.19)]
 
 
 def test_crypto_pipeline_rejects_missing_kline_pit_columns(tmp_path):

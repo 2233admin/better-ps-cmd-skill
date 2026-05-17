@@ -9,7 +9,10 @@ tdx-cli kline-range -> scripts/ingest-ashare-bridge.py
 -> _manifest/universe_manifest.json
 -> scripts/validate-ashare-lake.py
 -> scripts/build-ashare-coverage.py
--> backend app.research.pipeline --data-root
+-> scripts/build-ashare-calendar.py
+-> app.research.pipeline.world_snapshot
+-> app.research.pipeline.cli / benchmark
+-> scripts/run-ashare-control-plane.ps1
 ```
 
 ## Daily Kline PIT
@@ -105,3 +108,89 @@ uv run python -m app.research.pipeline.cli `
 
 Promotion requires `morning_package/control_report.json` to avoid `halt` and
 `reject`. Fixture data must not promote.
+
+## Incremental Lake
+
+Daily operation should merge only the new batch, not rebuild a five-year lake.
+Use the incremental merger after producing a PIT batch parquet or a
+`tdx-cli scan-kline --out-dir` batch:
+
+```powershell
+uv run python ..\scripts\ingest-ashare-incremental.py `
+  --out-root C:\tmp\katana-ashare-lake-tdxcli `
+  --batch-parquet C:\tmp\latest-batch\kline_daily_pit.parquet `
+  --start 2026-05-17 `
+  --end 2026-05-17 `
+  --json
+```
+
+Merge key is `symbol + event_time`. New rows replace existing rows with the
+same key, then the lake is sorted by `symbol,event_time`. The script writes:
+
+```text
+<lake-root>/_manifest/incremental_batch.json
+<lake-root>/_manifest/previous_content_hash
+<lake-root>/_manifest/new_content_hash
+```
+
+## Ashare Control Plane
+
+The control plane is the standard closure path:
+
+```text
+TDX/Lake -> validate -> coverage -> calendar -> world_snapshot
+-> research pipeline -> backtest tables -> benchmark -> gate report
+```
+
+DuckDB is not part of this acceptance path. The canonical A-share research
+input is the PIT parquet lake under `<lake-root>/pit/`; local DuckDB files remain
+legacy/tooling cache until a separate migration promotes them with PIT contracts.
+
+Run it from the repo root:
+
+```powershell
+scripts\run-ashare-control-plane.ps1 `
+  -LakeRoot C:\tmp\katana-ashare-lake-tdxcli `
+  -Date 2026-05-17 `
+  -OutRoot C:\tmp\katana-ashare-control-runs `
+  -Mode all
+```
+
+Outputs are placed under one run directory:
+
+```text
+control_plane_manifest.json
+lake_validation.json
+coverage.json
+trading_calendar.json
+world_snapshot/
+pipeline/
+benchmark.json
+gate_report.json
+```
+
+`ashare.world_snapshot_v1` is built only from PIT-safe kline rows visible at
+the requested date. It intentionally does not infer ST status, suspension,
+adjustments, sectors, or index membership unless those PIT datasets exist.
+
+Full-lake acceptance should check:
+
+```text
+lake_validation.json: passed=true and errors=[]
+world_snapshot/manifest.json: dataset=ashare.world_snapshot_v1 and rows>0
+benchmark.json: duration_ms, rows_per_sec, and symbols_per_sec are present
+gate_report.json: decision is not halt
+```
+
+The research pipeline now writes run-level parquet tables by default:
+
+```text
+backtest_summary.parquet
+backtest_orders.parquet
+backtest_trades.parquet
+backtest_equity_curve.parquet
+scan_results.parquet
+```
+
+Per-symbol backtest directories are only written with
+`--artifact-level full` or `-FullArtifacts`.

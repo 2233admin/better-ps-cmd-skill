@@ -85,8 +85,12 @@ A-share active surface:
 - `backend/app/trading/adapters/qmt/bridge.py`
 - `backend/app/trade/qmt_bridge.py` compatibility wrapper
 - `backend/tests/integration/test_easyxt_bridge_contract.py`
+- Canonical research/control input: PIT parquet lake under `<lake-root>/pit/`
 - External data lake: `/srv/lan-ai/data/ashare`
 - External checks: `/srv/lan-ai/artifacts/ashare-data-checks`
+
+DuckDB is not part of the A-share control-plane acceptance path; it remains a
+legacy/tooling cache unless a future PIT migration explicitly promotes it.
 
 Compatibility wrappers remain under `backend/app/data/`, `backend/app/api/`,
 `backend/app/strategy/`, and `backend/app/trade/` so older imports keep working
@@ -132,6 +136,8 @@ Focused checks:
 scripts/test-katana.sh unit
 scripts/test-katana.sh crypto
 scripts/test-katana.sh ashare
+scripts/test-katana.sh ashare-pipeline-smoke
+scripts/test-katana.sh ashare-benchmark
 scripts/test-katana.sh frontend
 ```
 

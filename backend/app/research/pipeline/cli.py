@@ -6,6 +6,8 @@ import argparse
 from datetime import date
 from pathlib import Path
 
+import polars as pl
+
 from .data_lake import resolve_kline_daily_symbols
 from .runner import PipelineConfig, run_pipeline
 
@@ -20,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, help="Output artifact directory")
     parser.add_argument("--pit-parquet", help="Optional PIT parquet input; fixture is used if omitted")
     parser.add_argument("--data-root", help="Optional A-share data lake root containing PIT parquet")
+    parser.add_argument("--world-snapshot", help="Optional ashare.world_snapshot_v1 parquet used as scan universe")
     parser.add_argument("--code-commit", default="manual", help="Git commit or explicit code id")
     parser.add_argument(
         "--artifact-level",
@@ -31,6 +34,9 @@ def main(argv: list[str] | None = None) -> int:
 
     data_root = Path(args.data_root) if args.data_root else None
     symbols = tuple(symbol.strip() for symbol in args.symbols.split(",") if symbol.strip()) if args.symbols else ()
+    world_snapshot = Path(args.world_snapshot) if args.world_snapshot else None
+    if not symbols and world_snapshot is not None:
+        symbols = _snapshot_symbols(world_snapshot)
     if not symbols and data_root is not None:
         symbols = resolve_kline_daily_symbols(data_root)
     if not symbols:
@@ -43,11 +49,19 @@ def main(argv: list[str] | None = None) -> int:
             out_dir=Path(args.out),
             pit_parquet=Path(args.pit_parquet) if args.pit_parquet else None,
             data_root=data_root,
+            world_snapshot=world_snapshot,
             code_commit=args.code_commit,
             artifact_level=args.artifact_level,
         )
     )
     return 0
+
+
+def _snapshot_symbols(path: Path) -> tuple[str, ...]:
+    frame = pl.read_parquet(path, columns=["symbol", "research_eligible"])
+    if "research_eligible" in frame.columns:
+        frame = frame.filter(pl.col("research_eligible"))
+    return tuple(sorted(str(symbol) for symbol in frame["symbol"].unique().to_list()))
 
 
 if __name__ == "__main__":
