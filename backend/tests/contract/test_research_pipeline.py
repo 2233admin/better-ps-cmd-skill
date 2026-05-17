@@ -47,10 +47,11 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
 
     expected = [
         "manifest.json",
-        "signals.json",
-        "factors.json",
+        "signals.parquet",
+        "factors.parquet",
         "scan_results.json",
         "scan_results.csv",
+        "scan_results.parquet",
         "backtest/orders.csv",
         "backtest/fills.csv",
         "backtest/daily_ledger.csv",
@@ -66,9 +67,13 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
     ]
     for relative in expected:
         assert (out_dir / relative).exists(), relative
+    assert not (out_dir / "signals.json").exists()
+    assert not (out_dir / "factors.json").exists()
 
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     scan_results = json.loads((out_dir / "scan_results.json").read_text(encoding="utf-8"))
+    signal_rows = pl.read_parquet(out_dir / "signals.parquet")
+    factor_rows = pl.read_parquet(out_dir / "factors.parquet")
     metrics = json.loads((out_dir / "backtest" / "metrics.json").read_text(encoding="utf-8"))
     audit = json.loads(
         (out_dir / "morning_package" / "audit.json").read_text(encoding="utf-8")
@@ -76,6 +81,8 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
 
     assert len(manifest["manifest_hash"]) == 64
     assert manifest["code_commit"] == "abc1234"
+    assert signal_rows.height > 0
+    assert factor_rows.height > 0
     assert len(scan_results) == 1
     assert scan_results[0]["symbol"] == "600000.SH"
     assert scan_results[0]["visible_rows"] > 0
@@ -115,6 +122,34 @@ def test_pipeline_cli_runs_fixture_chain(tmp_path):
     assert 1 <= len(intents) <= 3
     assert {intent["manual_action"] for intent in intents} == {"pending"}
     assert len({intent["symbol"] for intent in intents}) == len(intents)
+
+
+def test_pipeline_full_artifact_level_keeps_large_json_compatibility(tmp_path):
+    from app.research.pipeline.cli import main
+
+    out_dir = tmp_path / "cli-full-run"
+    assert (
+        main(
+            [
+                "--date",
+                "2026-05-17",
+                "--symbols",
+                "600000.SH",
+                "--out",
+                str(out_dir),
+                "--artifact-level",
+                "full",
+                "--code-commit",
+                "abc1234",
+            ]
+        )
+        == 0
+    )
+
+    assert (out_dir / "signals.parquet").exists()
+    assert (out_dir / "factors.parquet").exists()
+    assert (out_dir / "signals.json").exists()
+    assert (out_dir / "factors.json").exists()
 
 
 def test_pipeline_scan_results_cover_all_requested_symbols(tmp_path):

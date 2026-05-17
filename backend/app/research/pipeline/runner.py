@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import polars as pl
 
@@ -47,6 +47,7 @@ class PipelineConfig:
     position_cap: float = 0.05
     failure_condition: str = "Momentum falls below zero or PIT data quality changes."
     random_seed: int = 42
+    artifact_level: Literal["summary", "full"] = "summary"
 
 
 class ParquetPITStore:
@@ -128,8 +129,8 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
     )
     manifest_hash = manifest.manifest_hash()
     _write_json(config.out_dir / "manifest.json", manifest.to_payload() | {"manifest_hash": manifest_hash})
-    _write_json(config.out_dir / "signals.json", [_signal_payload(signal) for signal in output.signals])
-    _write_json(config.out_dir / "factors.json", [asdict(value) for value in output.factor_values])
+    _write_factor_artifacts(config.out_dir, output.factor_values, artifact_level=config.artifact_level)
+    _write_signal_artifacts(config.out_dir, output.signals, artifact_level=config.artifact_level)
 
     ledger_results = _run_ledger_backtests(config, pit_frame, output.signals)
     for symbol, result in ledger_results.items():
@@ -224,6 +225,9 @@ def _validate_pit(frame: pl.DataFrame, *, as_of: datetime) -> tuple[pl.DataFrame
 
 def _run_ledger_backtests(config: PipelineConfig, pit_frame: pl.DataFrame, signals) -> dict[str, LedgerBacktestResult]:
     results: dict[str, LedgerBacktestResult] = {}
+    signals_by_symbol: dict[str, list[Any]] = {}
+    for signal in signals:
+        signals_by_symbol.setdefault(signal.symbol, []).append(signal)
     backtester = AShareLedgerBacktester(
         AShareBacktestConfig(
             initial_capital=config.initial_capital,
@@ -234,7 +238,7 @@ def _run_ledger_backtests(config: PipelineConfig, pit_frame: pl.DataFrame, signa
         bars = pit_frame.filter(pl.col("symbol") == symbol) if "symbol" in pit_frame.columns else pit_frame
         if bars.is_empty():
             continue
-        signal_frame = _ledger_signal_frame(bars, [signal for signal in signals if signal.symbol == symbol])
+        signal_frame = _ledger_signal_frame(bars, signals_by_symbol.get(symbol, ()))
         results[symbol] = backtester.run(bars, signal_frame, symbol=symbol)
     return results
 
@@ -265,7 +269,9 @@ def _write_scan_results(
     rows = _scan_result_rows(symbols, pit_frame, factor_values, signals, ledger_results)
     _write_json(out_dir / "scan_results.json", rows)
     if rows:
-        pl.DataFrame(rows).write_csv(out_dir / "scan_results.csv")
+        frame = pl.DataFrame(rows)
+        frame.write_csv(out_dir / "scan_results.csv")
+        frame.write_parquet(out_dir / "scan_results.parquet")
 
 
 def _scan_result_rows(
@@ -407,6 +413,61 @@ def _legacy_symbol(code: object, market: object) -> str:
 
 def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, default=str, ensure_ascii=True, sort_keys=True, indent=2), encoding="utf-8")
+
+
+def _write_factor_artifacts(out_dir: Path, factor_values, *, artifact_level: str) -> None:
+    rows = [
+        {
+            "factor": value.factor,
+            "symbol": value.symbol,
+            "timestamp": value.timestamp,
+            "value": value.value,
+            "as_of": value.as_of,
+            "metadata": json.dumps(value.metadata, ensure_ascii=True, sort_keys=True),
+        }
+        for value in factor_values
+    ]
+    _write_parquet_or_empty(
+        out_dir / "factors.parquet",
+        rows,
+        schema={
+            "factor": pl.Utf8,
+            "symbol": pl.Utf8,
+            "timestamp": pl.Datetime(time_zone="UTC"),
+            "value": pl.Float64,
+            "as_of": pl.Datetime(time_zone="UTC"),
+            "metadata": pl.Utf8,
+        },
+    )
+    if artifact_level == "full":
+        _write_json(out_dir / "factors.json", [asdict(value) for value in factor_values])
+
+
+def _write_signal_artifacts(out_dir: Path, signals, *, artifact_level: str) -> None:
+    rows = [_signal_payload(signal) for signal in signals]
+    _write_parquet_or_empty(
+        out_dir / "signals.parquet",
+        rows,
+        schema={
+            "symbol": pl.Utf8,
+            "side": pl.Utf8,
+            "timestamp": pl.Utf8,
+            "as_of": pl.Utf8,
+            "strategy": pl.Utf8,
+            "confidence": pl.Float64,
+            "reason": pl.Utf8,
+            "horizon": pl.Utf8,
+        },
+    )
+    if artifact_level == "full":
+        _write_json(out_dir / "signals.json", rows)
+
+
+def _write_parquet_or_empty(path: Path, rows: list[dict[str, Any]], schema: dict[str, Any]) -> None:
+    if rows:
+        pl.DataFrame(rows).write_parquet(path)
+        return
+    pl.DataFrame(schema=schema).write_parquet(path)
 
 
 def _write_control_artifacts(path: Path, report: AShareControlReport) -> None:
