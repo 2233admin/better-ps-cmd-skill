@@ -1487,6 +1487,154 @@ def test_pipeline_normalize_legacy_uses_trading_calendar_for_available_at(tmp_pa
     assert fri_row["source_updated_at"].to_list()[0] == datetime(2026, 5, 18, 9, 30, tzinfo=UTC)
 
 
+def test_ashare_tradability_producer_writes_pit_parquet(tmp_path):
+    from app.research.ashare_data_contract import (
+        ASharePITDataset,
+        validate_pit_columns,
+    )
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    module = _load_script(scripts_dir / "ingest-ashare-tradability.py")
+
+    sh_fixture = tmp_path / "sh.json"
+    sh_fixture.write_text(
+        json.dumps(
+            {
+                "market": "sh",
+                "count": 3,
+                "items": [
+                    {"code": "600000", "name": "浦发银行", "market": "SH"},
+                    {"code": "600519", "name": "ST长生", "market": "SH"},
+                    {"code": "600730", "name": "中国高科退", "market": "SH"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    sz_fixture = tmp_path / "sz.json"
+    sz_fixture.write_text(
+        json.dumps(
+            {
+                "market": "sz",
+                "count": 1,
+                "items": [{"code": "000001", "name": "平安银行", "market": "SZ"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    lake = tmp_path / "lake"
+    rc = module.main(
+        [
+            "--security-list-json",
+            str(sh_fixture),
+            "--security-list-json",
+            str(sz_fixture),
+            "--out-root",
+            str(lake),
+            "--event-time",
+            "2026-05-18",
+        ]
+    )
+    assert rc == 0
+
+    parquet = lake / "pit" / "tradability_status_pit.parquet"
+    frame = pl.read_parquet(parquet)
+    assert frame.height == 4
+
+    check = validate_pit_columns(ASharePITDataset.TRADABILITY_STATUS, frame.columns)
+    assert check.passed, f"missing required columns: {check.missing_columns}"
+
+    by_symbol = {row["symbol"]: row for row in frame.iter_rows(named=True)}
+    assert by_symbol["600519.SH"]["is_st"] is True
+    assert "st_name_prefix" in by_symbol["600519.SH"]["reason"]
+    assert by_symbol["600730.SH"]["is_tradable"] is False
+    assert "delisted_name_marker" in by_symbol["600730.SH"]["reason"]
+    assert by_symbol["600000.SH"]["is_st"] is False
+    assert by_symbol["600000.SH"]["is_tradable"] is True
+    assert by_symbol["000001.SZ"]["market"] == "SZ"
+
+    universe = json.loads(
+        (lake / "_manifest" / "tradability_universe.json").read_text(encoding="utf-8")
+    )
+    assert universe["per_market_counts"] == {"SH": 3, "SZ": 1}
+    assert universe["rows"] == 4
+    assert any("is_suspended" in gap for gap in universe["honest_gaps"])
+
+
+def test_ashare_xdxr_producer_writes_adjustment_and_corporate_action(tmp_path):
+    from app.research.ashare_data_contract import (
+        ASharePITDataset,
+        validate_pit_columns,
+    )
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    module = _load_script(scripts_dir / "ingest-ashare-xdxr.py")
+
+    payload_600000 = {
+        "code": "600000",
+        "market": "SH",
+        "count": 2,
+        "items": [
+            {
+                "market": 1,
+                "code": "600000",
+                "date": 20250604,
+                "category": 1,
+                "fh_qltp": 1.5,
+                "pgj_qzgb": 0.0,
+                "sg_hltp": 0.0,
+                "pg_hzgb": 0.0,
+            },
+            {
+                "market": 1,
+                "code": "600000",
+                "date": 20260612,
+                "category": 1,
+                "fh_qltp": 2.0,
+                "pgj_qzgb": 3.5,
+                "sg_hltp": 5.0,
+                "pg_hzgb": 2.0,
+            },
+        ],
+    }
+    fixture = tmp_path / "600000.json"
+    fixture.write_text(json.dumps(payload_600000), encoding="utf-8")
+
+    lake = tmp_path / "lake"
+    rc = module.main(
+        ["--xdxr-json", str(fixture), "--out-root", str(lake)]
+    )
+    assert rc == 0
+
+    adjustment = pl.read_parquet(lake / "pit" / "adjustment_factor_pit.parquet")
+    check = validate_pit_columns(ASharePITDataset.ADJUSTMENT_FACTOR, adjustment.columns)
+    assert check.passed, f"missing required columns: {check.missing_columns}"
+    assert adjustment.height == 2
+
+    rows = list(adjustment.iter_rows(named=True))
+    cash_only = [r for r in rows if r["event_time"] == datetime(2025, 6, 4, tzinfo=UTC)][0]
+    bonus_rights = [r for r in rows if r["event_time"] == datetime(2026, 6, 12, tzinfo=UTC)][0]
+    assert cash_only["factor"] == 1.0
+    assert bonus_rights["factor"] == 1.0 + 5.0 + 2.0
+    assert cash_only["available_at"] == cash_only["event_time"]
+
+    action = pl.read_parquet(lake / "pit" / "corporate_action_pit.parquet")
+    assert action.height == 2
+    second = action.filter(pl.col("event_time") == datetime(2026, 6, 12, tzinfo=UTC)).row(0, named=True)
+    assert second["category"] == "chuquan_chuxi"
+    assert second["cash_per_share"] == 2.0
+    assert second["rights_price"] == 3.5
+    assert second["bonus_ratio"] == 5.0
+    assert second["rights_ratio"] == 2.0
+
+    universe = json.loads(
+        (lake / "_manifest" / "xdxr_universe.json").read_text(encoding="utf-8")
+    )
+    assert universe["rows"]["adjustment_factor"] == 2
+    assert universe["per_symbol_counts"] == {"600000.SH": 2}
+
+
 def _load_script(path: Path):
     import importlib.util
 
