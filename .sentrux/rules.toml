@@ -1,0 +1,52 @@
+# k-atana architecture rules.
+#
+# Keep this rule set conservative: it blocks known boundary violations without
+# trying to grade the whole legacy-heavy repo on day one.
+
+[constraints]
+max_cycles = 0
+
+[[layers]]
+name = "legacy"
+paths = ["legacy/*"]
+order = 0
+
+[[layers]]
+name = "old_core"
+paths = ["backend/src/quant_terminal/*"]
+order = 1
+
+[[layers]]
+name = "research"
+paths = ["backend/app/research/*"]
+order = 2
+
+[[layers]]
+name = "trading"
+paths = ["backend/app/trading/*"]
+order = 3
+
+[[layers]]
+name = "api"
+paths = ["backend/app/api/*"]
+order = 4
+
+[[boundaries]]
+from = "backend/app/*"
+to = "legacy/*"
+reason = "Active app code must not import parked legacy modules."
+
+[[boundaries]]
+from = "backend/app/research/*"
+to = "backend/app/trading/*"
+reason = "Research produces broker-neutral artifacts; trading owns execution adapters."
+
+[[boundaries]]
+from = "backend/app/research/*"
+to = "backend/app/trade/*"
+reason = "app.trade is compatibility-only and must stay out of research."
+
+[[boundaries]]
+from = "backend/app/research/*"
+to = "backend/src/quant_terminal/trade/*"
+reason = "Research must not depend on execution payloads directly; use trading adapters."

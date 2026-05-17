@@ -23,9 +23,14 @@ backend/app/
   macro/     Macro research services still used by the app.
   strategy/  Backtest, factors, and signal logic.
   research/  Target home for factors, signals, backtest, reports, PIT, and HMC.
+    ashare_data_contract.py  A-share dataset tiers and minimum PIT schemas.
+    manifest.py              Immutable dataset/experiment manifest contracts.
     models.py  Core research schemas.
     pit.py     Point-in-time query facade.
     hmc.py     HMC/materialist dynamics research boundary.
+    backtest/  Auditable A-share orders, fills, daily ledger, trades, metrics.
+    pipeline/  PIT/data-root -> visible PIT -> research runner -> ledger backtest -> control report -> morning package CLI.
+    crypto_pipeline/  Crypto PIT -> factors/signals -> ledger backtest -> control report -> session package.
   trading/   Active execution layer.
     intent/   Trading mode and order intent primitives.
     paper/    Simulated execution helpers.
@@ -137,6 +142,10 @@ services outside this repository.
 ## Product Boundary
 
 The runtime boundary is defined in [Product Boundary](PRODUCT_BOUNDARY.md).
+
+Old wheel reuse and migration routing is tracked in
+[Old Wheel Reuse Map](OLD_WHEEL_REUSE_MAP.md). Check that map before adding a
+new strategy, report, backtest, or execution-facing module.
 
 Default mode:
 

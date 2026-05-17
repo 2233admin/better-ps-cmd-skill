@@ -10,6 +10,8 @@
 
 市场边界见：[Product Boundary](docs/PRODUCT_BOUNDARY.md)。
 研究层边界见：[Research Architecture](docs/RESEARCH_ARCHITECTURE.md)。
+A 股数据/PIT 规范见：[A-Share Data And PIT Specification](docs/ASHARE_DATA_PIT_SPEC.md)。
+实验复现规范见：[Experiment Manifest Specification](docs/EXPERIMENT_MANIFEST_SPEC.md)。
 
 ## QMT Phase-1 Boundary
 
