@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 import polars as pl
 
-from app.research.agent import ResearchAgentRequest, ResearchAgentRunner
+from app.research.agent import ResearchAgentOutput, ResearchAgentRequest, ResearchAgentRunner
 from app.research.ashare_data_contract import ASharePITDataset
 from app.research.backtest import (
     AShareBacktestConfig,
@@ -19,7 +19,7 @@ from app.research.backtest import (
     write_backtest_artifacts,
 )
 from app.research.manifest import ExperimentManifest, sha256_json
-from app.research.models import Frequency, Market
+from app.research.models import Experiment, ExperimentStatus, Frequency, Market, ResearchSignal, SignalSide
 from app.research.morning_package import candidates_from_research_output
 from app.research.morning_package.builder import build_morning_package
 from app.research.morning_package.renderers import write_artifacts as write_morning_artifacts
@@ -114,7 +114,15 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
         factor_names=("momentum_20d", "volatility_20d"),
         entry_threshold=0.01,
     )
-    output = runner.run(request, ParquetPITStore(pit_frame))
+    plan_output = runner.build_plan(request)
+    factor_frame = _calculate_factor_frame(pit_frame, request.factor_names, as_of=as_of)
+    signal_frame = _calculate_signal_frame(
+        factor_frame,
+        as_of=as_of,
+        entry_threshold=request.entry_threshold,
+        exit_threshold=request.exit_threshold,
+    )
+    output = _research_output_from_frames(plan_output, request, factor_frame, signal_frame)
     manifest = runner.promote_to_manifest(
         output,
         code_commit=config.code_commit,
@@ -129,10 +137,10 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
     )
     manifest_hash = manifest.manifest_hash()
     _write_json(config.out_dir / "manifest.json", manifest.to_payload() | {"manifest_hash": manifest_hash})
-    _write_factor_artifacts(config.out_dir, output.factor_values, artifact_level=config.artifact_level)
-    _write_signal_artifacts(config.out_dir, output.signals, artifact_level=config.artifact_level)
+    _write_factor_artifacts(config.out_dir, factor_frame, artifact_level=config.artifact_level)
+    _write_signal_artifacts(config.out_dir, signal_frame, artifact_level=config.artifact_level)
 
-    ledger_results = _run_ledger_backtests(config, pit_frame, output.signals)
+    ledger_results = _run_ledger_backtests(config, pit_frame, signal_frame)
     for symbol, result in ledger_results.items():
         write_backtest_artifacts(result, config.out_dir / "backtest" / symbol)
     if ledger_results:
@@ -142,8 +150,8 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
         config.out_dir,
         config.symbols,
         pit_frame,
-        output.factor_values,
-        output.signals,
+        factor_frame,
+        signal_frame,
         ledger_results,
     )
 
@@ -174,8 +182,8 @@ def run_pipeline(config: PipelineConfig) -> PipelineResult:
         pit_summary=pit_summary,
         requested_symbols=config.symbols,
         visible_symbols=_visible_symbols(pit_frame),
-        factor_values=len(output.factor_values),
-        signals=len(output.signals),
+        factor_values=factor_frame.height,
+        signals=signal_frame.height,
         ledger_results=ledger_results,
         manifest_hash=manifest_hash,
         dataset_version=snapshot_result.version.version,
@@ -223,11 +231,13 @@ def _validate_pit(frame: pl.DataFrame, *, as_of: datetime) -> tuple[pl.DataFrame
     return visible.sort(["symbol", "event_time"] if "symbol" in visible.columns else [_time_column(visible)]), summary
 
 
-def _run_ledger_backtests(config: PipelineConfig, pit_frame: pl.DataFrame, signals) -> dict[str, LedgerBacktestResult]:
+def _run_ledger_backtests(
+    config: PipelineConfig,
+    pit_frame: pl.DataFrame,
+    signal_frame: pl.DataFrame,
+) -> dict[str, LedgerBacktestResult]:
     results: dict[str, LedgerBacktestResult] = {}
-    signals_by_symbol: dict[str, list[Any]] = {}
-    for signal in signals:
-        signals_by_symbol.setdefault(signal.symbol, []).append(signal)
+    buy_signal_dates = _buy_signal_dates_by_symbol(signal_frame)
     backtester = AShareLedgerBacktester(
         AShareBacktestConfig(
             initial_capital=config.initial_capital,
@@ -238,17 +248,16 @@ def _run_ledger_backtests(config: PipelineConfig, pit_frame: pl.DataFrame, signa
         bars = pit_frame.filter(pl.col("symbol") == symbol) if "symbol" in pit_frame.columns else pit_frame
         if bars.is_empty():
             continue
-        signal_frame = _ledger_signal_frame(bars, signals_by_symbol.get(symbol, ()))
-        results[symbol] = backtester.run(bars, signal_frame, symbol=symbol)
+        ledger_signals = _ledger_signal_frame(bars, buy_signal_dates.get(symbol, set()))
+        results[symbol] = backtester.run(bars, ledger_signals, symbol=symbol)
     return results
 
 
-def _ledger_signal_frame(bars: pl.DataFrame, signals) -> pl.DataFrame:
+def _ledger_signal_frame(bars: pl.DataFrame, signal_dates: set[date]) -> pl.DataFrame:
     time_col = _time_column(bars)
     dates = bars.sort(time_col)[time_col].to_list()
     values = [0] * len(dates)
-    if signals and values:
-        signal_dates = {_date_value(signal.timestamp) for signal in signals if signal.side.value == "buy"}
+    if signal_dates and values:
         for idx, value in enumerate(dates):
             if _date_value(value) in signal_dates:
                 values[idx] = 1
@@ -258,15 +267,181 @@ def _ledger_signal_frame(bars: pl.DataFrame, signals) -> pl.DataFrame:
     return pl.DataFrame({time_col: dates, "signal": values})
 
 
+def _calculate_factor_frame(
+    pit_frame: pl.DataFrame,
+    factor_names: tuple[str, ...],
+    *,
+    as_of: datetime,
+) -> pl.DataFrame:
+    if "symbol" not in pit_frame.columns:
+        raise ValueError("A-share factor pipeline requires symbol")
+    if "close" not in pit_frame.columns:
+        raise ValueError("A-share factor pipeline requires close")
+    time_col = _time_column(pit_frame)
+    frame = pit_frame.sort(["symbol", time_col])
+    expressions = []
+    if "momentum_20d" in factor_names:
+        expressions.append(
+            (pl.col("close") / pl.col("close").shift(20) - 1).over("symbol").alias("momentum_20d")
+        )
+    if "volatility_20d" in factor_names:
+        expressions.append(pl.col("close").pct_change().rolling_std(20).over("symbol").alias("volatility_20d"))
+    if "turnover_pressure_20d" in factor_names:
+        if "volume" not in frame.columns or "amount" not in frame.columns:
+            raise ValueError("turnover_pressure_20d requires volume and amount")
+        expressions.append(
+            (
+                (pl.col("amount") / pl.col("amount").rolling_mean(20))
+                + (pl.col("volume") / pl.col("volume").rolling_mean(20))
+            )
+            .over("symbol")
+            .alias("turnover_pressure_20d")
+        )
+    if not expressions:
+        return pl.DataFrame(
+            schema={
+                "factor": pl.Utf8,
+                "symbol": pl.Utf8,
+                "timestamp": pl.Datetime(time_zone="UTC"),
+                "value": pl.Float64,
+                "as_of": pl.Datetime(time_zone="UTC"),
+                "metadata": pl.Utf8,
+            }
+        )
+    wide = frame.with_columns(expressions)
+    return (
+        wide.select("symbol", pl.col(time_col).alias("timestamp"), *factor_names)
+        .unpivot(index=["symbol", "timestamp"], on=list(factor_names), variable_name="factor", value_name="value")
+        .drop_nulls("value")
+        .with_columns(
+            pl.lit(as_of).alias("as_of"),
+            pl.lit("{}").alias("metadata"),
+        )
+        .select("factor", "symbol", "timestamp", "value", "as_of", "metadata")
+    )
+
+
+def _calculate_signal_frame(
+    factor_frame: pl.DataFrame,
+    *,
+    as_of: datetime,
+    entry_threshold: float,
+    exit_threshold: float,
+) -> pl.DataFrame:
+    schema = {
+        "symbol": pl.Utf8,
+        "side": pl.Utf8,
+        "timestamp": pl.Datetime(time_zone="UTC"),
+        "as_of": pl.Datetime(time_zone="UTC"),
+        "strategy": pl.Utf8,
+        "confidence": pl.Float64,
+        "reason": pl.Utf8,
+        "horizon": pl.Utf8,
+    }
+    if factor_frame.is_empty():
+        return pl.DataFrame(schema=schema)
+    momentum = factor_frame.filter(pl.col("factor") == "momentum_20d").select(
+        "symbol",
+        "timestamp",
+        pl.col("value").alias("momentum_20d"),
+    )
+    if momentum.is_empty():
+        return pl.DataFrame(schema=schema)
+    confidence = pl.col("momentum_20d").abs() / 0.10
+    return (
+        momentum.filter((pl.col("momentum_20d") > entry_threshold) | (pl.col("momentum_20d") < exit_threshold))
+        .with_columns(
+            pl.when(pl.col("momentum_20d") > entry_threshold).then(pl.lit("buy")).otherwise(pl.lit("sell")).alias("side"),
+            pl.lit(as_of).alias("as_of"),
+            pl.lit("research_agent_momentum_20d").alias("strategy"),
+            pl.when(confidence > 1.0).then(1.0).otherwise(confidence).alias("confidence"),
+            (pl.lit("momentum_20d=") + pl.col("momentum_20d").round(4).cast(pl.Utf8)).alias("reason"),
+            pl.lit("1d").alias("horizon"),
+        )
+        .select("symbol", "side", "timestamp", "as_of", "strategy", "confidence", "reason", "horizon")
+        .sort(["timestamp", "symbol"])
+    )
+
+
+def _research_output_from_frames(
+    plan_output: ResearchAgentOutput,
+    request: ResearchAgentRequest,
+    factor_frame: pl.DataFrame,
+    signal_frame: pl.DataFrame,
+) -> ResearchAgentOutput:
+    experiment = Experiment(
+        name=plan_output.experiment.name,
+        market=plan_output.experiment.market,
+        datasets=plan_output.experiment.datasets,
+        factors=plan_output.experiment.factors,
+        start=plan_output.experiment.start,
+        end=plan_output.experiment.end,
+        as_of=plan_output.experiment.as_of,
+        id=plan_output.experiment.id,
+        status=ExperimentStatus.COMPLETED,
+        hypothesis=plan_output.experiment.hypothesis,
+        metrics={
+            "requested_symbols": float(len(request.symbols)),
+            "symbols_scanned": float(factor_frame.select("symbol").unique().height if not factor_frame.is_empty() else 0),
+            "factor_values": float(factor_frame.height),
+            "signals_generated": float(signal_frame.height),
+        },
+    )
+    return ResearchAgentOutput(
+        factors=plan_output.factors,
+        experiment=experiment,
+        signals=_candidate_signals(signal_frame, as_of=request.as_of),
+        factor_values=(),
+    )
+
+
+def _candidate_signals(signal_frame: pl.DataFrame, *, as_of: datetime, limit: int = 20) -> tuple[ResearchSignal, ...]:
+    if signal_frame.is_empty():
+        return ()
+    rows = (
+        signal_frame.filter(pl.col("side") == "buy")
+        .sort(["timestamp", "symbol"])
+        .group_by("symbol", maintain_order=True)
+        .first()
+        .head(limit)
+        .to_dicts()
+    )
+    return tuple(
+        ResearchSignal(
+            symbol=str(row["symbol"]),
+            side=SignalSide.BUY,
+            timestamp=_as_utc_datetime(row["timestamp"]),
+            as_of=as_of,
+            strategy=str(row["strategy"]),
+            confidence=float(row["confidence"]),
+            reason=str(row["reason"]),
+            horizon=str(row["horizon"]),
+        )
+        for row in rows
+    )
+
+
+def _buy_signal_dates_by_symbol(signal_frame: pl.DataFrame) -> dict[str, set[date]]:
+    if signal_frame.is_empty():
+        return {}
+    rows = (
+        signal_frame.filter(pl.col("side") == "buy")
+        .group_by("symbol")
+        .agg(pl.col("timestamp"))
+        .to_dicts()
+    )
+    return {str(row["symbol"]): {_date_value(value) for value in row["timestamp"]} for row in rows}
+
+
 def _write_scan_results(
     out_dir: Path,
     symbols: tuple[str, ...],
     pit_frame: pl.DataFrame,
-    factor_values,
-    signals,
+    factor_frame: pl.DataFrame,
+    signal_frame: pl.DataFrame,
     ledger_results: dict[str, LedgerBacktestResult],
 ) -> None:
-    rows = _scan_result_rows(symbols, pit_frame, factor_values, signals, ledger_results)
+    rows = _scan_result_rows(symbols, pit_frame, factor_frame, signal_frame, ledger_results)
     _write_json(out_dir / "scan_results.json", rows)
     if rows:
         frame = pl.DataFrame(rows)
@@ -277,26 +452,13 @@ def _write_scan_results(
 def _scan_result_rows(
     symbols: tuple[str, ...],
     pit_frame: pl.DataFrame,
-    factor_values,
-    signals,
+    factor_frame: pl.DataFrame,
+    signal_frame: pl.DataFrame,
     ledger_results: dict[str, LedgerBacktestResult],
 ) -> list[dict[str, Any]]:
     time_col = _time_column(pit_frame)
-    latest_factors: dict[tuple[str, str], Any] = {}
-    for value in sorted(factor_values, key=lambda item: item.timestamp):
-        latest_factors[(value.symbol, value.factor)] = value.value
-
-    latest_signal_by_symbol: dict[str, Any] = {}
-    signal_counts: dict[str, int] = {}
-    buy_counts: dict[str, int] = {}
-    sell_counts: dict[str, int] = {}
-    for signal in sorted(signals, key=lambda item: item.timestamp):
-        latest_signal_by_symbol[signal.symbol] = signal
-        signal_counts[signal.symbol] = signal_counts.get(signal.symbol, 0) + 1
-        if signal.side.value == "buy":
-            buy_counts[signal.symbol] = buy_counts.get(signal.symbol, 0) + 1
-        if signal.side.value == "sell":
-            sell_counts[signal.symbol] = sell_counts.get(signal.symbol, 0) + 1
+    latest_factors = _latest_factors_by_symbol(factor_frame)
+    signal_counts, buy_counts, sell_counts, latest_signal_by_symbol = _signal_summaries(signal_frame)
 
     rows: list[dict[str, Any]] = []
     for symbol in symbols:
@@ -304,7 +466,7 @@ def _scan_result_rows(
         latest_bar = bars.sort(time_col).tail(1).to_dicts()[0] if not bars.is_empty() else {}
         result = ledger_results.get(symbol)
         metrics = result.metrics() if result is not None else {}
-        latest_signal = latest_signal_by_symbol.get(symbol)
+        latest_signal = latest_signal_by_symbol.get(symbol, {})
         rows.append(
             {
                 "symbol": symbol,
@@ -316,8 +478,8 @@ def _scan_result_rows(
                 "signals": signal_counts.get(symbol, 0),
                 "buy_signals": buy_counts.get(symbol, 0),
                 "sell_signals": sell_counts.get(symbol, 0),
-                "last_signal_side": latest_signal.side.value if latest_signal is not None else "",
-                "last_signal_at": latest_signal.timestamp if latest_signal is not None else None,
+                "last_signal_side": latest_signal.get("side", ""),
+                "last_signal_at": latest_signal.get("timestamp"),
                 "backtest_status": "completed" if result is not None else "missing",
                 "completed_trades": len(result.trades) if result is not None else 0,
                 "rejected_orders": sum(1 for order in result.orders if order.status == "rejected")
@@ -331,6 +493,46 @@ def _scan_result_rows(
             }
         )
     return rows
+
+
+def _latest_factors_by_symbol(factor_frame: pl.DataFrame) -> dict[tuple[str, str], float]:
+    if factor_frame.is_empty():
+        return {}
+    rows = (
+        factor_frame.sort("timestamp")
+        .group_by(["symbol", "factor"], maintain_order=True)
+        .last()
+        .select("symbol", "factor", "value")
+        .to_dicts()
+    )
+    return {(str(row["symbol"]), str(row["factor"])): float(row["value"]) for row in rows}
+
+
+def _signal_summaries(
+    signal_frame: pl.DataFrame,
+) -> tuple[dict[str, int], dict[str, int], dict[str, int], dict[str, dict[str, Any]]]:
+    if signal_frame.is_empty():
+        return {}, {}, {}, {}
+    signal_counts = {
+        str(row["symbol"]): int(row["len"])
+        for row in signal_frame.group_by("symbol").len().to_dicts()
+    }
+    side_counts = signal_frame.group_by(["symbol", "side"]).len().to_dicts()
+    buy_counts = {
+        str(row["symbol"]): int(row["len"])
+        for row in side_counts
+        if str(row["side"]) == "buy"
+    }
+    sell_counts = {
+        str(row["symbol"]): int(row["len"])
+        for row in side_counts
+        if str(row["side"]) == "sell"
+    }
+    latest = {
+        str(row["symbol"]): row
+        for row in signal_frame.sort("timestamp").group_by("symbol", maintain_order=True).last().to_dicts()
+    }
+    return signal_counts, buy_counts, sell_counts, latest
 
 
 def _visible_symbols(pit_frame: pl.DataFrame) -> tuple[str, ...]:
@@ -415,59 +617,16 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, default=str, ensure_ascii=True, sort_keys=True, indent=2), encoding="utf-8")
 
 
-def _write_factor_artifacts(out_dir: Path, factor_values, *, artifact_level: str) -> None:
-    rows = [
-        {
-            "factor": value.factor,
-            "symbol": value.symbol,
-            "timestamp": value.timestamp,
-            "value": value.value,
-            "as_of": value.as_of,
-            "metadata": json.dumps(value.metadata, ensure_ascii=True, sort_keys=True),
-        }
-        for value in factor_values
-    ]
-    _write_parquet_or_empty(
-        out_dir / "factors.parquet",
-        rows,
-        schema={
-            "factor": pl.Utf8,
-            "symbol": pl.Utf8,
-            "timestamp": pl.Datetime(time_zone="UTC"),
-            "value": pl.Float64,
-            "as_of": pl.Datetime(time_zone="UTC"),
-            "metadata": pl.Utf8,
-        },
-    )
+def _write_factor_artifacts(out_dir: Path, factor_frame: pl.DataFrame, *, artifact_level: str) -> None:
+    factor_frame.write_parquet(out_dir / "factors.parquet")
     if artifact_level == "full":
-        _write_json(out_dir / "factors.json", [asdict(value) for value in factor_values])
+        _write_json(out_dir / "factors.json", factor_frame.to_dicts())
 
 
-def _write_signal_artifacts(out_dir: Path, signals, *, artifact_level: str) -> None:
-    rows = [_signal_payload(signal) for signal in signals]
-    _write_parquet_or_empty(
-        out_dir / "signals.parquet",
-        rows,
-        schema={
-            "symbol": pl.Utf8,
-            "side": pl.Utf8,
-            "timestamp": pl.Utf8,
-            "as_of": pl.Utf8,
-            "strategy": pl.Utf8,
-            "confidence": pl.Float64,
-            "reason": pl.Utf8,
-            "horizon": pl.Utf8,
-        },
-    )
+def _write_signal_artifacts(out_dir: Path, signal_frame: pl.DataFrame, *, artifact_level: str) -> None:
+    signal_frame.write_parquet(out_dir / "signals.parquet")
     if artifact_level == "full":
-        _write_json(out_dir / "signals.json", rows)
-
-
-def _write_parquet_or_empty(path: Path, rows: list[dict[str, Any]], schema: dict[str, Any]) -> None:
-    if rows:
-        pl.DataFrame(rows).write_parquet(path)
-        return
-    pl.DataFrame(schema=schema).write_parquet(path)
+        _write_json(out_dir / "signals.json", signal_frame.to_dicts())
 
 
 def _write_control_artifacts(path: Path, report: AShareControlReport) -> None:
@@ -506,14 +665,6 @@ def _merge_control_into_audit(path: Path, report: AShareControlReport) -> None:
     _write_json(path, payload)
 
 
-def _signal_payload(signal) -> dict[str, Any]:
-    payload = asdict(signal)
-    payload["side"] = signal.side.value
-    payload["timestamp"] = signal.timestamp.isoformat()
-    payload["as_of"] = signal.as_of.isoformat()
-    return payload
-
-
 def _time_column(frame: pl.DataFrame) -> str:
     for column in ("event_time", "datetime", "date"):
         if column in frame.columns:
@@ -527,6 +678,14 @@ def _date_value(value: object):
     if isinstance(value, date):
         return value
     return value
+
+
+def _as_utc_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=UTC)
+    raise ValueError(f"unsupported datetime value: {value!r}")
 
 
 def _min_datetime(frame: pl.DataFrame) -> datetime:
