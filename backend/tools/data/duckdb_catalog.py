@@ -2,7 +2,9 @@
 import duckdb
 import json
 
-conn = duckdb.connect("C:/Users/Administrator/quant-terminal/data/quant.duckdb", read_only=True)
+from app.data.paths import resolve_duckdb_path
+
+conn = duckdb.connect(str(resolve_duckdb_path()), read_only=True)
 
 schemas = conn.execute("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema', 'pg_catalog') ORDER BY schema_name").fetchall()
 

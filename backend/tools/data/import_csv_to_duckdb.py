@@ -6,10 +6,12 @@ import duckdb
 import pandas as pd
 from pathlib import Path
 
-CSV_DIR = Path("C:/Users/Administrator/quant-terminal/data/akshare_fetch")
-DB_PATH = "C:/Users/Administrator/quant-terminal/data/quant.duckdb"
+from app.data.paths import resolve_data_dir, resolve_duckdb_path
 
-conn = duckdb.connect(DB_PATH, read_only=False)
+CSV_DIR = resolve_data_dir() / "akshare_fetch"
+DB_PATH = resolve_duckdb_path()
+
+conn = duckdb.connect(str(DB_PATH), read_only=False)
 conn.execute("CREATE SCHEMA IF NOT EXISTS csv_raw")
 
 csv_files = sorted(CSV_DIR.glob("*.csv"))

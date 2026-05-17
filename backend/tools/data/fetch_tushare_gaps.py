@@ -12,11 +12,13 @@ import pandas as pd
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from app.data.paths import resolve_data_dir, resolve_duckdb_path
+
 # ============ 配置 ============
 TOKEN = "c8c7d9ef93bdcf19fd48104716bec17f84443558faf197b54ba624a8"
 BASE_URL = "http://tsy.xiaodefa.cn"
-DATA_DIR = Path("C:/Users/Administrator/quant-terminal/data")
-DB_PATH = DATA_DIR / "quant.duckdb"
+DATA_DIR = resolve_data_dir()
+DB_PATH = resolve_duckdb_path()
 CSV_DIR = DATA_DIR / "akshare_fetch"
 TODAY = datetime.date.today().strftime("%Y%m%d")
 # ==============================

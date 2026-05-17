@@ -1,8 +1,9 @@
 """Point-in-time query contracts.
 
-The current implementation supports price bars through DuckDB and makes the
-PIT boundary explicit. Non-price datasets must implement publication-time
-metadata before they can be used in research experiments.
+This module is a legacy facade over DuckDB price-bar tables. It remains useful
+for compatibility paths and local inspection, but it is not the canonical
+A-share control-plane source. Promotion-grade A-share research must flow
+through the PIT parquet lake and `app.research.pipeline`.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def ashare_market_code(symbol: str) -> int:
 
 
 class PointInTimeStore:
-    """PIT facade over DuckDBStore for datasets that have safe query semantics."""
+    """Legacy PIT facade over DuckDBStore for price-bar compatibility only."""
 
     def __init__(self, store: DuckDBStore):
         self.store = store

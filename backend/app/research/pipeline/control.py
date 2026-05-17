@@ -37,6 +37,10 @@ class AShareControlConfig:
     reject_symbol_coverage_ratio: float = 0.80
     source_is_fixture: bool = False
     require_tradability_status: bool = True
+    max_gross_exposure: float = 1.0
+    max_turnover_ratio: float = 1.0
+    max_industry_concentration: float = 0.25
+    max_liquidity_stress: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,14 @@ def evaluate_ashare_control(
     manifest_hash: str,
     dataset_version: str,
     package_decision: str,
+    regime: str = "",
+    gross_exposure: float = 0.0,
+    net_exposure: float = 0.0,
+    turnover_ratio: float = 0.0,
+    industry_concentration: float = 0.0,
+    liquidity_stress: float = 0.0,
+    eligible_universe_count: int = 0,
+    state_position_limit: float | None = None,
 ) -> AShareControlReport:
     halt_reasons: list[str] = []
     warnings: list[str] = []
@@ -128,6 +140,10 @@ def evaluate_ashare_control(
         halt_reasons.append("invalid position cap")
     if not 0 <= config.reject_symbol_coverage_ratio <= config.min_symbol_coverage_ratio <= 1:
         halt_reasons.append("invalid symbol coverage thresholds")
+    if config.max_gross_exposure <= 0 or config.max_gross_exposure > 1:
+        halt_reasons.append("invalid gross exposure limit")
+    if config.max_industry_concentration <= 0 or config.max_industry_concentration > 1:
+        halt_reasons.append("invalid industry concentration limit")
 
     if pit_summary.visible_rows < config.min_visible_rows:
         observe_reasons.append("sample shorter than minimum visible rows")
@@ -145,6 +161,18 @@ def evaluate_ashare_control(
         observe_reasons.append("no signals generated")
     if not ledger_results:
         observe_reasons.append("no ledger backtests generated")
+    if eligible_universe_count == 0:
+        observe_reasons.append("no research-eligible universe")
+    if turnover_ratio > config.max_turnover_ratio:
+        reject_reasons.append("turnover exceeds control limit")
+    if industry_concentration > config.max_industry_concentration:
+        reject_reasons.append("industry concentration exceeds control limit")
+    if liquidity_stress > config.max_liquidity_stress:
+        reject_reasons.append("liquidity stress exceeds control limit")
+    if gross_exposure > config.max_gross_exposure:
+        reject_reasons.append("gross exposure exceeds control limit")
+    if state_position_limit is not None and gross_exposure > state_position_limit:
+        reject_reasons.append("gross exposure exceeds state regime limit")
 
     max_drawdown = max((result.max_drawdown for result in ledger_results.values()), default=0.0)
     completed_returns = [
@@ -204,6 +232,14 @@ def evaluate_ashare_control(
         "tradability_status_missing_rows": pit_summary.tradability_status_missing_rows,
         "package_decision": package_decision,
         "position_cap": config.position_cap,
+        "regime": regime,
+        "gross_exposure": gross_exposure,
+        "net_exposure": net_exposure,
+        "turnover_ratio": turnover_ratio,
+        "industry_concentration": industry_concentration,
+        "liquidity_stress": liquidity_stress,
+        "eligible_universe_count": eligible_universe_count,
+        "state_position_limit": state_position_limit,
     }
     error_terms = {
         "max_drawdown": max_drawdown,
@@ -213,6 +249,10 @@ def evaluate_ashare_control(
         "symbol_coverage_shortfall": float(max(0.0, config.min_symbol_coverage_ratio - coverage_ratio)),
         "min_symbol_coverage_ratio": config.min_symbol_coverage_ratio,
         "reject_symbol_coverage_ratio": config.reject_symbol_coverage_ratio,
+        "gross_exposure_limit": config.max_gross_exposure,
+        "industry_concentration_limit": config.max_industry_concentration,
+        "liquidity_stress_limit": config.max_liquidity_stress,
+        "turnover_ratio_limit": config.max_turnover_ratio,
         "reject_reasons": reject_reasons,
         "observe_reasons": observe_reasons,
     }
@@ -226,6 +266,9 @@ def evaluate_ashare_control(
         "symbol_coverage_complete": coverage_ratio >= config.min_symbol_coverage_ratio,
         "execution_not_embedded": True,
         "tradability_status_bound": pit_summary.tradability_status_missing_rows == 0,
+        "gross_exposure_within_limit": gross_exposure <= config.max_gross_exposure,
+        "industry_concentration_within_limit": industry_concentration <= config.max_industry_concentration,
+        "liquidity_stress_within_limit": liquidity_stress <= config.max_liquidity_stress,
     }
     objective = {
         "decision": "promote only when PIT, factor, signal, backtest, and morning package evidence pass controls",
@@ -233,6 +276,10 @@ def evaluate_ashare_control(
         "min_visible_rows": config.min_visible_rows,
         "min_symbol_coverage_ratio": config.min_symbol_coverage_ratio,
         "reject_symbol_coverage_ratio": config.reject_symbol_coverage_ratio,
+        "max_gross_exposure": config.max_gross_exposure,
+        "max_turnover_ratio": config.max_turnover_ratio,
+        "max_industry_concentration": config.max_industry_concentration,
+        "max_liquidity_stress": config.max_liquidity_stress,
     }
     return AShareControlReport(
         decision=decision,

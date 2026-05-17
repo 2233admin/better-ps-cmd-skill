@@ -45,19 +45,23 @@ PIT-safe datasets and must not import trading adapters.
 
 ## Point-in-Time Rule
 
-Research code should use `backend/app/research/pit.py` for historical data.
+Promotion-grade A-share research should use the PIT parquet lake through
+`backend/app/research/pipeline/` and `backend/app/research/pipeline/data_lake.py`.
+`backend/app/research/pit.py` remains a legacy DuckDB compatibility facade for
+price bars only.
 The A-share data rules are defined in
 [A-Share Data And PIT Specification](ASHARE_DATA_PIT_SPEC.md).
 Experiment reproducibility is defined in
 [Experiment Manifest Specification](EXPERIMENT_MANIFEST_SPEC.md).
 
-Current supported PIT datasets:
+Current legacy DuckDB PIT facade datasets:
 
 - `kline_daily`
 - `kline_minute`
 
 For these price-bar datasets, `as_of` clips the maximum visible bar time. That
-is not enough for all A-share research, but it prevents the easiest future leak.
+is transitional only. The control-plane truth for A-share is the PIT parquet lake,
+not local DuckDB tables.
 
 Datasets not yet PIT-safe:
 

@@ -49,6 +49,11 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
         "manifest.json",
         "signals.parquet",
         "factors.parquet",
+        "portfolio_targets.parquet",
+        "portfolio_targets.json",
+        "regime_summary.json",
+        "attribution.json",
+        "rebalance_intent.json",
         "scan_results.json",
         "scan_results.csv",
         "scan_results.parquet",
@@ -85,6 +90,10 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
     factor_rows = pl.read_parquet(out_dir / "factors.parquet")
     metrics = json.loads((out_dir / "backtest" / "metrics.json").read_text(encoding="utf-8"))
     summary_rows = pl.read_parquet(out_dir / "backtest_summary.parquet")
+    targets = json.loads((out_dir / "portfolio_targets.json").read_text(encoding="utf-8"))
+    regime = json.loads((out_dir / "regime_summary.json").read_text(encoding="utf-8"))
+    attribution = json.loads((out_dir / "attribution.json").read_text(encoding="utf-8"))
+    rebalance = json.loads((out_dir / "rebalance_intent.json").read_text(encoding="utf-8"))
     audit = json.loads(
         (out_dir / "morning_package" / "audit.json").read_text(encoding="utf-8")
     )
@@ -98,6 +107,13 @@ def test_pipeline_generates_manifest_backtest_and_morning_package(tmp_path):
     assert scan_results[0]["visible_rows"] > 0
     assert scan_results[0]["backtest_status"] == "completed"
     assert "momentum_20d" in scan_results[0]
+    assert scan_results[0]["state_tag"] == regime["regime"]
+    assert targets[0]["symbol"] == "600000.SH"
+    assert targets[0]["target_weight"] <= 0.05
+    assert attribution["market_state"]["regime"] == regime["regime"]
+    assert rebalance["control_decision"] == result.control_report.decision
+    assert rebalance["executable"] is False
+    assert rebalance["targets"] == []
     assert metrics["metrics"]["max_drawdown"] >= 0
     assert summary_rows["symbol"].to_list() == ["600000.SH"]
     assert audit["manifest_hash"] == manifest["manifest_hash"]
@@ -201,10 +217,14 @@ def test_world_snapshot_filters_future_available_rows(tmp_path):
     rows = pl.read_parquet(result.parquet_path)
 
     assert result.snapshot_id == "ashare.world_snapshot_v1:2026-05-17"
+    assert result.state_path.exists()
+    assert result.market_state["visible_symbol_count"] == 1
+    assert result.market_state["regime"] in {"risk_on", "neutral", "risk_off"}
     assert rows.height == 1
     assert rows["close"].to_list() == [13.52]
     assert rows.filter(pl.col("available_at") > pl.col("as_of")).is_empty()
     assert rows["research_eligible"].to_list() == [True]
+    assert rows["research_eligible_reason"].to_list() == ["tradability status missing; kline visibility only"]
 
 
 def test_world_snapshot_merges_tradability_status_pit(tmp_path):
@@ -241,6 +261,7 @@ def test_world_snapshot_merges_tradability_status_pit(tmp_path):
 
     assert rows["research_eligible"].to_list() == [False]
     assert rows["tradable_reason"].to_list() == ["st_stock"]
+    assert rows["research_eligible_reason"].to_list() == ["st_stock"]
 
 
 def test_pipeline_can_use_world_snapshot_as_universe(tmp_path):
@@ -1060,6 +1081,50 @@ def test_ashare_control_rejects_drawdown_over_limit():
     assert "max drawdown exceeds control limit" in report.error_terms["reject_reasons"]
 
 
+def test_ashare_control_rejects_portfolio_constraint_breaches():
+    from app.research.pipeline.control import (
+        AShareControlConfig,
+        ASharePITValidationSummary,
+        evaluate_ashare_control,
+    )
+
+    report = evaluate_ashare_control(
+        config=AShareControlConfig(
+            position_cap=0.05,
+            max_industry_concentration=0.25,
+            max_turnover_ratio=0.50,
+            max_liquidity_stress=0.05,
+        ),
+        pit_summary=ASharePITValidationSummary(
+            input_rows=90,
+            visible_rows=90,
+            rejected_future_rows=0,
+            duplicate_rows=0,
+        ),
+        requested_symbols=("600000.SH", "000001.SZ"),
+        visible_symbols=("600000.SH", "000001.SZ"),
+        factor_values=20,
+        signals=2,
+        ledger_results={},
+        manifest_hash="a" * 64,
+        dataset_version="2026-05-17",
+        package_decision="trade",
+        regime="risk_on",
+        gross_exposure=0.60,
+        net_exposure=0.60,
+        turnover_ratio=0.60,
+        industry_concentration=0.40,
+        liquidity_stress=0.10,
+        eligible_universe_count=2,
+        state_position_limit=1.0,
+    )
+
+    assert report.decision == "reject"
+    assert "turnover exceeds control limit" in report.error_terms["reject_reasons"]
+    assert "industry concentration exceeds control limit" in report.error_terms["reject_reasons"]
+    assert "liquidity stress exceeds control limit" in report.error_terms["reject_reasons"]
+
+
 def test_ashare_control_rejects_when_completed_backtests_do_not_make_money():
     from app.research.backtest import LedgerBacktestResult, TradeRecord
     from app.research.pipeline.control import (
@@ -1633,6 +1698,70 @@ def test_ashare_xdxr_producer_writes_adjustment_and_corporate_action(tmp_path):
     )
     assert universe["rows"]["adjustment_factor"] == 2
     assert universe["per_symbol_counts"] == {"600000.SH": 2}
+
+
+def test_duckdb_export_script_migrates_legacy_daily_bars_into_pit_lake(tmp_path):
+    import duckdb
+
+    root = tmp_path / "lake"
+    db_path = tmp_path / "legacy.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE kline_daily (
+            code VARCHAR,
+            market INTEGER,
+            date DATE,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            amount DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO kline_daily VALUES
+        ('600000', 1, '2026-04-03', 10.0, 10.2, 9.9, 10.1, 100, 1010.0),
+        ('000001', 0, '2026-04-03', 12.0, 12.2, 11.9, 12.1, 120, 1452.0)
+        """
+    )
+    conn.close()
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    export_module = _load_script(scripts_dir / "export-ashare-duckdb-to-lake.py")
+    validate_module = _load_script(scripts_dir / "validate-ashare-lake.py")
+    coverage_module = _load_script(scripts_dir / "build-ashare-coverage.py")
+
+    assert (
+        export_module.main(
+            [
+                "--db-path",
+                str(db_path),
+                "--out-root",
+                str(root),
+                "--start",
+                "2026-04-03",
+                "--end",
+                "2026-04-03",
+            ]
+        )
+        == 0
+    )
+    assert validate_module.main(["--root", str(root)]) == 0
+    assert coverage_module.main(["--root", str(root)]) == 0
+
+    frame = pl.read_parquet(root / "pit" / "kline_daily_pit.parquet")
+    universe = json.loads((root / "_manifest" / "universe_manifest.json").read_text(encoding="utf-8"))
+    coverage = json.loads((root / "_manifest" / "coverage.json").read_text(encoding="utf-8"))
+
+    assert frame["symbol"].to_list() == ["000001.SZ", "600000.SH"]
+    assert frame["market"].to_list() == ["SZ", "SH"]
+    assert all(value.hour == 9 and value.minute == 30 for value in frame["available_at"].to_list())
+    assert universe["source"] == "legacy_duckdb_export"
+    assert coverage["items"][0]["dataset"] == "ashare.kline_daily_pit"
 
 
 def _load_script(path: Path):

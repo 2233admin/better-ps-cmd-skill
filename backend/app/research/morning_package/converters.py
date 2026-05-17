@@ -71,10 +71,24 @@ def candidates_from_research_output(
                 backtest=_backtest_evidence(output, signal.symbol, backtest),
                 position_cap=position_caps.get(signal.symbol),
                 failure_condition=failure_conditions.get(signal.symbol, ""),
-                auxiliary_notes=f"confidence={signal.confidence:.4f}; horizon={signal.horizon}",
+                auxiliary_notes=_auxiliary_notes(signal, backtest),
             )
         )
     return tuple(candidates)
+
+
+def _auxiliary_notes(signal, backtest: LedgerBacktestResult | None) -> str:
+    parts = [
+        f"confidence={signal.confidence:.4f}",
+        f"horizon={signal.horizon}",
+    ]
+    if signal.state_tag:
+        parts.append(f"state={signal.state_tag}")
+    if signal.score is not None:
+        parts.append(f"score={signal.score:.4f}")
+    if backtest is not None:
+        parts.append(f"trade_count={len(backtest.trades)}")
+    return "; ".join(parts)
 
 
 def _backtest_evidence(

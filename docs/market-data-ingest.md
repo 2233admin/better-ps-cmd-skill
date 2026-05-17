@@ -146,6 +146,32 @@ DuckDB is not part of this acceptance path. The canonical A-share research
 input is the PIT parquet lake under `<lake-root>/pit/`; local DuckDB files remain
 legacy/tooling cache until a separate migration promotes them with PIT contracts.
 
+If historical A-share bars still live in a local DuckDB file, export them into
+the lake first:
+
+```powershell
+$env:KATANA_ASHARE_DATA_DIR = "C:\Users\Administrator\projects\k-atana\DATA\ashare"
+uv run python ..\scripts\export-ashare-duckdb-to-lake.py `
+  --start 2026-04-01 `
+  --end 2026-05-16
+```
+
+That export path is a migration bridge only. It does not make DuckDB the
+control-plane fact source.
+
+If `KATANA_ASHARE_DUCKDB_PATH` is unset, the exporter first looks for:
+
+```text
+<repo>/DATA/ashare/Aquant.duckdb
+<repo>/DATA/ashare/ashare.duckdb
+```
+
+If `KATANA_ASHARE_LAKE_ROOT` is unset, the default lake root is:
+
+```text
+<repo>/DATA/ashare/lake
+```
+
 Run it from the repo root:
 
 ```powershell

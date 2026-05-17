@@ -10,8 +10,10 @@ import duckdb
 import polars as pl
 from datetime import datetime
 
+from app.data.paths import resolve_duckdb_path
+
 # 使用不同的数据库路径
-DB_PATH = Path('C:/Users/Administrator/quant-terminal/data/quant_test.duckdb')
+DB_PATH = resolve_duckdb_path("quant_test.duckdb")
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 conn = duckdb.connect(str(DB_PATH))

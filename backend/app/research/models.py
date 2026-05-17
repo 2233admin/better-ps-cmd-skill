@@ -102,6 +102,8 @@ class ResearchSignal:
     confidence: float
     reason: str
     horizon: str = "1d"
+    state_tag: str = ""
+    score: float | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
@@ -150,3 +152,40 @@ class HMCStateEstimate:
             raise ValueError("risk_score must be between 0 and 1")
         if self.as_of < self.timestamp:
             raise ValueError("as_of cannot be earlier than state timestamp")
+
+
+@dataclass(frozen=True)
+class PortfolioTarget:
+    symbol: str
+    target_weight: float
+    score: float
+    state_tag: str
+    eligibility_reason: str
+    industry: str = ""
+    rank: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.symbol.strip():
+            raise ValueError("portfolio target symbol is required")
+        if not 0.0 <= self.target_weight <= 1.0:
+            raise ValueError("portfolio target weight must be between 0 and 1")
+
+
+@dataclass(frozen=True)
+class RebalanceIntent:
+    as_of: datetime
+    targets: tuple[PortfolioTarget, ...]
+    control_decision: str
+    risk_flags: tuple[str, ...]
+    dataset_version: str
+    manifest_hash: str
+    rebalance_mode: str = "weekly"
+    executable: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.control_decision.strip():
+            raise ValueError("rebalance intent control decision is required")
+        if not self.dataset_version.strip():
+            raise ValueError("rebalance intent dataset version is required")
+        if not self.manifest_hash.strip():
+            raise ValueError("rebalance intent manifest hash is required")

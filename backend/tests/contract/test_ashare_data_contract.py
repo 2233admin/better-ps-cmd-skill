@@ -15,6 +15,80 @@ def test_ashare_pit_spec_declares_non_negotiable_boundaries():
     assert "source_updated_at" in text
     assert "financial statements" in text
     assert "T+1" in text
+    assert "DuckDB tables are legacy cache/tooling only" in text
+
+
+def test_research_architecture_marks_duckdb_pit_as_legacy():
+    doc = Path(__file__).resolve().parents[3] / "docs" / "RESEARCH_ARCHITECTURE.md"
+    text = doc.read_text(encoding="utf-8")
+
+    assert "legacy DuckDB compatibility facade" in text
+    assert "control-plane truth for A-share is the PIT parquet lake" in text
+
+
+def test_runtime_and_active_scripts_do_not_hardcode_old_duckdb_root():
+    root = Path(__file__).resolve().parents[3]
+    targets = [
+        root / "backend" / "app" / "data" / "store.py",
+        root / "backend" / "app" / "data" / "paths.py",
+        root / "backend" / "app" / "macro" / "knowledge.py",
+        root / "backend" / "tools" / "data" / "import_csv_to_duckdb.py",
+        root / "backend" / "tools" / "data" / "fetch_tushare_gaps.py",
+        root / "backend" / "tools" / "data" / "duckdb_schema.py",
+        root / "backend" / "tools" / "data" / "duckdb_catalog.py",
+        root / "backend" / "run_backtest.py",
+        root / "scripts" / "export-ashare-duckdb-to-lake.py",
+    ]
+
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        assert "C:/Users/Administrator/quant-terminal/data" not in text, path
+
+
+def test_data_paths_resolve_from_env_or_repo_local(monkeypatch):
+    from app.data.paths import (
+        default_ashare_data_dir,
+        default_ashare_lake_root,
+        default_data_dir,
+        project_root,
+        resolve_ashare_data_dir,
+        resolve_ashare_duckdb_path,
+        resolve_ashare_lake_root,
+        resolve_chroma_dir,
+        resolve_data_dir,
+        resolve_duckdb_path,
+    )
+
+    monkeypatch.delenv("KATANA_DATA_DIR", raising=False)
+    monkeypatch.delenv("KATANA_DUCKDB_PATH", raising=False)
+    monkeypatch.delenv("KATANA_CHROMA_DIR", raising=False)
+    monkeypatch.delenv("KATANA_ASHARE_DATA_DIR", raising=False)
+    monkeypatch.delenv("KATANA_ASHARE_LAKE_ROOT", raising=False)
+    monkeypatch.delenv("KATANA_ASHARE_DUCKDB_PATH", raising=False)
+
+    assert default_data_dir() == project_root() / "DATA"
+    assert default_ashare_data_dir() == project_root() / "DATA" / "ashare"
+    assert default_ashare_lake_root() == project_root() / "DATA" / "ashare" / "lake"
+    assert resolve_data_dir() == default_data_dir().resolve()
+    assert resolve_ashare_data_dir() == default_ashare_data_dir().resolve()
+    assert resolve_ashare_lake_root() == default_ashare_lake_root().resolve()
+    assert resolve_duckdb_path().parent == default_data_dir().resolve()
+    assert resolve_chroma_dir().parent == default_data_dir().resolve()
+    assert resolve_ashare_duckdb_path().parent == default_ashare_data_dir().resolve()
+
+    monkeypatch.setenv("KATANA_DATA_DIR", str(Path("C:/tmp/katana-data")))
+    monkeypatch.setenv("KATANA_DUCKDB_PATH", str(Path("C:/tmp/custom.duckdb")))
+    monkeypatch.setenv("KATANA_CHROMA_DIR", str(Path("C:/tmp/chroma-cache")))
+    monkeypatch.setenv("KATANA_ASHARE_DATA_DIR", str(Path("C:/tmp/katana-ashare")))
+    monkeypatch.setenv("KATANA_ASHARE_LAKE_ROOT", str(Path("C:/tmp/katana-ashare-lake")))
+    monkeypatch.setenv("KATANA_ASHARE_DUCKDB_PATH", str(Path("C:/tmp/Aquant.duckdb")))
+
+    assert resolve_data_dir() == Path("C:/tmp/katana-data").resolve()
+    assert resolve_duckdb_path() == Path("C:/tmp/custom.duckdb").resolve()
+    assert resolve_chroma_dir() == Path("C:/tmp/chroma-cache").resolve()
+    assert resolve_ashare_data_dir() == Path("C:/tmp/katana-ashare").resolve()
+    assert resolve_ashare_lake_root() == Path("C:/tmp/katana-ashare-lake").resolve()
+    assert resolve_ashare_duckdb_path() == Path("C:/tmp/Aquant.duckdb").resolve()
 
 
 def test_price_bar_pit_contract_requires_visibility_columns():

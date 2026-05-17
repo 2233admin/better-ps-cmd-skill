@@ -1,4 +1,9 @@
-"""数据存储层 - DuckDB 本地分析数据库"""
+"""Legacy DuckDB cache and local analysis store.
+
+This module remains in service for macro helpers, compatibility APIs, and
+manual tooling. It is not the canonical A-share research/control-plane fact
+source. A-share promotion runs must use the PIT parquet lake instead.
+"""
 
 from pathlib import Path
 
@@ -6,9 +11,9 @@ import duckdb
 import polars as pl
 from loguru import logger
 
+from .paths import resolve_duckdb_path
 
-DATA_DIR = Path("C:/Users/Administrator/quant-terminal/data")
-DB_PATH = DATA_DIR / "quant.duckdb"
+DB_PATH = resolve_duckdb_path()
 
 
 class DuckDBStore:

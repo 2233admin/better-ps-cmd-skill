@@ -17,6 +17,10 @@ backtests.
 Research experiments must reference immutable dataset versions, not mutable
 table names. See [Experiment Manifest Specification](EXPERIMENT_MANIFEST_SPEC.md).
 
+Local DuckDB tables are legacy cache/tooling only. They are not a production
+research fact source unless they are exported, normalized, and accepted as PIT
+parquet lake artifacts.
+
 ## Dataset Tiers
 
 `raw`

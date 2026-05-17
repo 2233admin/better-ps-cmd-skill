@@ -1,7 +1,9 @@
 """DuckDB 全表结构导出"""
 import duckdb
 
-conn = duckdb.connect("C:/Users/Administrator/quant-terminal/data/quant.duckdb", read_only=True)
+from app.data.paths import resolve_duckdb_path
+
+conn = duckdb.connect(str(resolve_duckdb_path()), read_only=True)
 
 # 所有schema
 schemas = conn.execute("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name").fetchall()

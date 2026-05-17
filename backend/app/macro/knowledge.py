@@ -1,12 +1,12 @@
 """宏观知识库 - ChromaDB 向量存储"""
 
-from pathlib import Path
 from datetime import datetime
 
 from loguru import logger
 
-DATA_DIR = Path("C:/Users/Administrator/quant-terminal/data")
-CHROMA_DIR = DATA_DIR / "chromadb"
+from ..data.paths import resolve_chroma_dir
+
+CHROMA_DIR = resolve_chroma_dir()
 
 
 def _get_collection():
