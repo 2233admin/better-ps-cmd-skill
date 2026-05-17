@@ -91,7 +91,8 @@ unit() {
   uv_python -m py_compile \
     ../scripts/ingest-ashare-bridge.py \
     ../scripts/validate-ashare-lake.py \
-    ../scripts/build-ashare-coverage.py
+    ../scripts/build-ashare-coverage.py \
+    ../scripts/build-ashare-calendar.py
   uv_python -m pytest tests/unit tests/contract -p no:cacheprovider
 }
 
@@ -148,6 +149,7 @@ crypto() {
 ashare() {
   require_uv
   local manifest="$ASHARE_DATA_ROOT/_manifest/coverage.json"
+  local calendar_manifest="$ASHARE_DATA_ROOT/_manifest/trading_calendar.json"
   if [[ ! -f "$manifest" ]]; then
     echo "A-share coverage manifest not found: $manifest" >&2
     echo "Run the data-lake daily check on the Arch/NAS host first." >&2
@@ -161,10 +163,28 @@ from pathlib import Path
 manifest = Path(sys.argv[1])
 payload = json.loads(manifest.read_text(encoding="utf-8"))
 entries = payload.get("items", payload.get("entries", [])) if isinstance(payload, dict) else payload
-kline_entries = [item for item in entries if item.get("dataset") == "kline_daily"]
+kline_entries = [item for item in entries if item.get("dataset") in {"kline_daily", "ashare.kline_daily_pit"}]
 if not kline_entries:
-    raise SystemExit(f"no kline_daily coverage entries in {manifest}")
+    raise SystemExit(f"no A-share kline_daily coverage entries in {manifest}")
 print(f"ashare coverage OK: {len(kline_entries)} kline_daily entries from {manifest}")
+PY
+  if [[ ! -f "$calendar_manifest" ]]; then
+    echo "A-share trading calendar manifest not found: $calendar_manifest" >&2
+    echo "Run scripts/build-ashare-calendar.py for this lake before promoting it." >&2
+    exit 1
+  fi
+  uv_python - "$calendar_manifest" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = Path(sys.argv[1])
+payload = json.loads(manifest.read_text(encoding="utf-8"))
+if payload.get("dataset") != "ashare.trading_calendar":
+    raise SystemExit(f"unexpected calendar dataset in {manifest}: {payload.get('dataset')}")
+if payload.get("source") != "tdx_lake_observed":
+    raise SystemExit(f"unexpected calendar source in {manifest}: {payload.get('source')}")
+print(f"ashare trading calendar OK: {payload.get('row_count')} rows from {manifest}")
 PY
 }
 

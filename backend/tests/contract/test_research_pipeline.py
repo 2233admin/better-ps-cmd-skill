@@ -874,6 +874,77 @@ def test_ashare_lake_scripts_validate_and_build_coverage(tmp_path):
     assert manifest["items"][0]["path"] == "pit/kline_daily_pit.parquet"
 
 
+def test_ashare_calendar_snapshot_is_built_from_lake_observed_days(tmp_path):
+    root = tmp_path / "lake"
+    parquet = root / "pit" / "kline_daily_pit.parquet"
+    parquet.parent.mkdir(parents=True)
+    pl.DataFrame(
+        [
+            {
+                "symbol": "600000.SH",
+                "market": "SH",
+                "event_time": datetime(2026, 4, 3, tzinfo=UTC),
+                "available_at": datetime(2026, 4, 3, 16, tzinfo=UTC),
+                "source_updated_at": datetime(2026, 4, 3, 17, tzinfo=UTC),
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "volume": 100,
+                "amount": 1010.0,
+            },
+            {
+                "symbol": "600000.SH",
+                "market": "SH",
+                "event_time": datetime(2026, 4, 5, tzinfo=UTC),
+                "available_at": datetime(2026, 4, 5, 16, tzinfo=UTC),
+                "source_updated_at": datetime(2026, 4, 5, 17, tzinfo=UTC),
+                "open": 10.1,
+                "high": 10.3,
+                "low": 10.0,
+                "close": 10.2,
+                "volume": 100,
+                "amount": 1020.0,
+            },
+        ]
+    ).write_parquet(parquet)
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    calendar_module = _load_script(scripts_dir / "build-ashare-calendar.py")
+
+    assert (
+        calendar_module.main(
+            [
+                "--root",
+                str(root),
+                "--start",
+                "2026-04-03",
+                "--end",
+                "2026-04-06",
+            ]
+        )
+        == 0
+    )
+
+    calendar = pl.read_parquet(root / "calendar" / "trading_calendar.parquet")
+    report = json.loads((root / "_manifest" / "trading_calendar.json").read_text(encoding="utf-8"))
+    assert report["dataset"] == "ashare.trading_calendar"
+    assert report["source"] == "tdx_lake_observed"
+    assert report["row_count"] == 4
+    assert calendar.filter(pl.col("is_trading_day")).height == 2
+    assert report["anomalies"]["weekday_without_bars"] == [
+        {"date": "2026-04-06", "market": "SH"}
+    ]
+    assert report["anomalies"]["weekend_with_bars"] == [
+        {
+            "date": "2026-04-05",
+            "market": "SH",
+            "observed_rows": 1,
+            "observed_symbols": 1,
+        }
+    ]
+
+
 def test_ingest_script_normalizes_tdxcli_scan_out_dir(tmp_path):
     scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
     ingest_module = _load_script(scripts_dir / "ingest-ashare-bridge.py")
