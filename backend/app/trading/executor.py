@@ -261,8 +261,8 @@ class OrderExecutor:
     def sync_real_positions(self, real_positions: list[dict]):
         real_map = {}
         for p in real_positions:
-            code = str(p.get("证券代码", p.get("code", "")))
-            vol = int(p.get("股票余额", p.get("可用余额", p.get("volume", 0))))
+            code = str(p.get("symbol", p.get("证券代码", p.get("code", ""))))
+            vol = int(p.get("quantity", p.get("股票余额", p.get("可用余额", p.get("volume", 0)))))
             if code and vol > 0:
                 real_map[code] = vol
 

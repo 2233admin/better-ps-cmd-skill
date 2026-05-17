@@ -74,11 +74,9 @@ async def _account_sync_loop():
 
     while True:
         try:
-            reader = acct_mgr.get_primary()
-            if reader and reader.is_available():
-                positions = reader.get_positions()
-                if positions:
-                    executor.sync_real_positions(positions)
+            positions = acct_mgr.get_positions()
+            if positions:
+                executor.sync_real_positions(positions)
             await asyncio.sleep(30)  # 30秒同步一次
         except Exception as e:
             logger.error(f"Account sync error: {e}")
