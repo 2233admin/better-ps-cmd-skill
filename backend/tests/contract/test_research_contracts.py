@@ -14,6 +14,7 @@ def test_research_architecture_doc_declares_pit_and_hmc_boundaries():
     assert "HMC" in text
     assert "ResearchSignal" in text
     assert "KATANA_TRADING_MODE=research" in text
+    assert "ASHARE_DATA_PIT_SPEC.md" in text
 
 
 def test_experiment_requires_as_of_not_before_end():

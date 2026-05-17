@@ -14,12 +14,20 @@ from enum import Enum
 import polars as pl
 
 from ..data.store import DuckDBStore
+from .ashare_data_contract import ASharePITDataset, require_pit_dataset
 from .models import Frequency, Market
 
 
 class PITDataset(str, Enum):
     KLINE_DAILY = "kline_daily"
     KLINE_MINUTE = "kline_minute"
+
+    def ashare_contract_dataset(self) -> ASharePITDataset:
+        if self == PITDataset.KLINE_DAILY:
+            return require_pit_dataset(ASharePITDataset.KLINE_DAILY.value)
+        if self == PITDataset.KLINE_MINUTE:
+            return require_pit_dataset(ASharePITDataset.KLINE_MINUTE.value)
+        raise ValueError(f"unsupported PIT dataset: {self.value}")
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,7 @@ class PointInTimeStore:
     def query(self, request: PointInTimeQuery) -> pl.DataFrame:
         if request.market != Market.ASHARE:
             raise ValueError("PointInTimeStore currently supports ashare only")
+        request.dataset.ashare_contract_dataset()
         if request.dataset == PITDataset.KLINE_DAILY:
             return self._query_daily(request)
         if request.dataset == PITDataset.KLINE_MINUTE:
