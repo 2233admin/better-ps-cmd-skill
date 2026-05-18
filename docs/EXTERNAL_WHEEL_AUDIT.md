@@ -33,6 +33,10 @@ k-atana subsystems, so future contributors do not rebuild what already exists.
 | Time-series ML (ai_lab roadmap) | `app/ai_lab/` | **functime-org/functime** (Polars-native) | 1,172 | 2026-05-03 | 487 | active but niche |
 | Reconciliation state machine | `backend/app/trading/recon_state.py` | (`transitions`) | — | — | — | **keep hand-rolled** — 5 states, framework over-engineering |
 | Live_test rate-limit gate | `backend/app/trading/adapters/qmt/bridge.py` | (`pyrate-limiter`) | — | — | — | **keep hand-rolled** — tightly coupled to bridge contract |
+| Technical indicators | `backend/app/data/indicators.py` | **TA-Lib/ta-lib-python** | 11,964 | 2026-03-16 | **22,455** | **HIGH PRIORITY** — by far highest install rate in the entire audit; we almost certainly should be importing this instead |
+| Portfolio optimization | (not built) | **robertmartin8/PyPortfolioOpt** (efficient frontier, Black-Litterman, HRP) | 5,724 | 2026-04-20 | 5,775 | **NEW gap surfaced** — we have no portfolio optimization layer; this is the standard. Riskfolio-Lib (4.2k★ / 3.2k/day) is the risk-focused alternative |
+| Quant terminal (overlaps k-atana scope) | k-atana itself | **OpenBB-finance/OpenBB** | 67,724 | 2026-05-18 | 2,474 | **strategic question** — OpenBB explicitly targets "AI agents" and is the largest finance-OSS project. Worth a hard look at whether k-atana's frontend should integrate vs reinvent |
+| Agent-based trading framework (2026 trend) | — | **HKUDS/Vibe-Trading** | 7,531 | 2026-05-17 | (no PyPI release) | **2026 trend signal** — Hong Kong U Data Science Lab. Worth tracking before building anything in `app/ai_lab/trading/` |
 
 ## DO NOT recommend (graveyard)
 
@@ -43,6 +47,8 @@ k-atana subsystems, so future contributors do not rebuild what already exists.
 | **quantopian/empyrical** | Original, archived; do not depend on it directly. |
 | **quantopian/pyfolio** | Original, archived. Use `pyfolio-reloaded` if you must. |
 | **quantopian/zipline** | Original archived; use `stefan-jansen/zipline-reloaded` (US-equity focused, no live trading — wrong fit for A-share). |
+| **hudson-and-thames/mlfinlab** | 4,743★ but **0 installs/day** (literally zero in last day, 7 last month) + last push 2023-10. Implementations from López de Prado's *Advances in Financial ML*. Pure star bait — the book sells, the library is abandoned. Re-implement the chapters you need from the book, don't depend on this. |
+| **mementum/backtrader** | 21,580★ + 8,714 installs/day but **last push 2024-08-19 (21 months dead)**. Same pattern as tushare: huge install count from inertia (every retail tutorial uses it), but zero maintenance. New projects: vectorbt (14k/day, active) or rqalpha (CN-native). Existing users: fork or migrate. |
 
 ## Rule
 
@@ -124,3 +130,16 @@ Live `api.github.com` fix produced this doc.
 - **tushare** looked dead on Github (no commits 14mo) but PyPI shows **17k installs/day** — looked usable from one signal, but those are paying-customer binary installs, not OSS health.
 
 Triangulate three signals (stars + last-push + PyPI installs/day via `opencli pypi downloads <pkg>`) before recommending. Single number lies. Numbers in the shortlist, not adjectives.
+
+**Fourth-pass lesson (added 2026-05-18 late evening):** even after triangulation, the **original audit was scoped too narrowly** — I evaluated wheels for the subsystems we already had, not wheels for things we *should* have but don't. Re-ran with `gh search repos --topic quantitative-finance --sort stars` and surfaced 4 major omissions:
+
+- **TA-Lib** — 22,455 installs/day, by far the highest in the entire audit. We have `data/indicators.py` hand-rolled. Should almost certainly be ta-lib.
+- **PyPortfolioOpt** — 5,775 installs/day, MIT, active. We have **no portfolio optimization layer at all**. This is a gap we didn't know to look for.
+- **OpenBB** — 67,724★, pushed today. Explicitly targets AI agents. This is the largest finance-OSS project on GitHub and it overlaps with k-atana's terminal scope — strategic question, not just a wheel pick.
+- **Vibe-Trading (HKUDS)** — 2026 agent-trading trend, very recent. Track before building `app/ai_lab/trading/`.
+
+Also caught two more graveyard inhabitants via install rate:
+- **mlfinlab** — 4.7k★ but **0 installs/day** + 2.5yr dead. Star bait based on López de Prado's book.
+- **backtrader** — 21k★ + 8.7k installs/day but **21 months dead**. Inertia + tutorial recommendations keep installs high.
+
+**Process update:** start with broad GitHub topic search (`gh search repos --topic <domain> --sort stars --limit 25`), not "wheels for the modules I already wrote." The latter misses the strategic-overlap candidates (OpenBB) and the gaps you didn't know existed (PyPortfolioOpt).
