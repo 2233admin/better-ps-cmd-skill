@@ -172,3 +172,11 @@ Also caught two more graveyard inhabitants via install rate:
 **Process lesson #2:** I evaluated ecosystem with internal-knowledge searches even after switching to live API data. Asking Grok (xAI, different training data + browse access) for "what am I missing on the 2026 frontier" surfaced TradingAgents (76k★ — should have been impossible to miss) and confirmed AGPL risk on OpenBB. Independent-model second opinion is cheap and catches systematic blind spots.
 
 **Process lesson #3 — license is a signal that beats install rate:** freqtrade (GPL-3.0, 50k★, 2.4k/day) is technically active and popular, but practically graveyarded for any project that might be distributed. Same for OpenBB (AGPLv3 — *network* copyleft, even harder than GPL). Pin license in the triangulation, not just stars/push/installs.
+
+### Ecosystem signal: OKX Agent Trade Kit (added 2026-05-18 evening)
+
+OKX shipped an official `okx-trade-mcp` + `okx-trade-cli` toolkit (https://www.okx.com/docs-v5/agent_zh/) explicitly for LLM agents (Claude / Cursor / VS Code). JavaScript only — no Python equivalent. Three implications:
+
+1. **XAR-423 unchanged:** still ccxt + python-okx for our Python stack.
+2. **XAR-413 validated:** OKX's four-layer safety (demo / read-only / permission / fund-operation caution tags) is the same pattern as our EasyXT live_test promotion gate. Independent confirmation our architecture is right.
+3. **XAR-424 gains a primary reference:** exchange-side endorsement of agent-trading direction. When designing `app/ai_lab/trading/`, the OKX kit's safety architecture is what "OKX officially considers safe for an LLM to call." Borrow patterns, don't import.
