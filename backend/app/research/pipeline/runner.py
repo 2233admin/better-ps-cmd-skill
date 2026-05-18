@@ -279,12 +279,19 @@ def _resolve_input_parquet(config: PipelineConfig) -> Path:
 
 
 def _materialize_pit_input(config: PipelineConfig, source_path: Path) -> tuple[Path, pl.DataFrame]:
-    frame = pl.read_parquet(source_path)
-    if {"symbol", "event_time", "available_at", "source_updated_at"}.issubset(set(frame.columns)):
+    schema = pl.scan_parquet(source_path).collect_schema()
+    columns = set(schema.names())
+    if "symbol" in columns and config.symbols:
+        frame = (
+            pl.scan_parquet(source_path)
+            .filter(pl.col("symbol").is_in(list(config.symbols)))
+            .collect()
+        )
+    else:
+        frame = pl.read_parquet(source_path)
+    if {"symbol", "event_time", "available_at", "source_updated_at"}.issubset(columns):
         return source_path, _merge_optional_pit_layers(config, frame)
-    if {"code", "market", "date", "open", "high", "low", "close", "volume", "amount"}.issubset(
-        set(frame.columns)
-    ):
+    if {"code", "market", "date", "open", "high", "low", "close", "volume", "amount"}.issubset(columns):
         calendar = _load_trading_calendar(config.data_root) if config.data_root is not None else None
         normalized = _normalize_legacy_kline(frame, config.symbols, calendar=calendar)
         path = config.out_dir / "normalized_kline_daily_pit.parquet"

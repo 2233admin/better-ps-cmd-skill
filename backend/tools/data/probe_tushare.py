@@ -1,9 +1,11 @@
-"""Tushare 全API探测脚本"""
-import requests
-import sys
+"""Tushare/ChinaData API probe."""
 
-TOKEN = "c8c7d9ef93bdcf19fd48104716bec17f84443558faf197b54ba624a8"
-BASE_URL = "http://tsy.xiaodefa.cn"
+from __future__ import annotations
+
+import pandas as pd
+
+from tushare_client import fetch_tushare_dataframe, resolve_token
+
 
 APIS = [
     ("limit_list_d", {"trade_date": "20240102", "limit_type": "U"}),
@@ -21,64 +23,37 @@ APIS = [
     ("share_float", {}),
     ("margin", {}),
     ("moneyflow_hsgt", {"trade_date": "20240102"}),
-    ("hsgt_top10", {"trade_date": "20240102", "market": "SH"}),
+    ("hsgt_top10", {"trade_date": "20240102", "market_type": "1"}),
     ("stock_basic", {"ts_code": "000001.SZ"}),
     ("index_daily", {"ts_code": "000001.SH", "start_date": "20240101", "end_date": "20240110"}),
     ("bak_daily", {"trade_date": "20240102"}),
     ("hsgt_hold", {}),
-    ("fund_etf", {}),
+    ("fund_basic", {"market": "E"}),
     ("stk_manager", {}),
-    ("research_list", {}),
-    ("sw_index_daily", {}),
-    ("stock_pledge_stat", {}),
-    ("money_supply", {}),
-    ("m2", {}),
-    ("stock_daily", {"ts_code": "000001.SZ", "start_date": "20240101", "end_date": "20240110"}),
-    ("stock_tick", {"trade_date": "20240102", "ts_code": "000001.SZ"}),
-    ("stock_orderbook", {"ts_code": "000001.SZ"}),
-    ("futures_basic", {}),
-    ("futures_daily", {}),
-    ("options_basic", {}),
-    ("bond_basic", {}),
-    ("cb_basic", {}),
-    ("dj_index_daily", {}),
-    ("hsi_daily", {}),
-    ("index_weight", {"index_code": "000001.SH"}),
-    ("concept_detail", {}),
-    ("report", {"ts_code": "000001.SZ", "start_date": "20240101", "end_date": "20240110"}),
-    ("forecast", {"ts_code": "000001.SZ"}),
-    ("express", {"ts_code": "000001.SZ"}),
-    ("writable", {}),
-    ("stk_rewards", {}),
-    ("stk_limit_list", {"trade_date": "20240102"}),
-    ("margin_detail", {}),
-    ("rzrq_detail", {}),
-    ("rzrq", {}),
+    ("research_report", {"ts_code": "000001.SZ"}),
+    ("sw_daily", {"ts_code": "801010.SI", "start_date": "20240101", "end_date": "20240110"}),
+    ("stk_limit", {"trade_date": "20240102"}),
+    ("margin_detail", {"trade_date": "20240102"}),
 ]
 
-print(f"{'API':<25} {'状态':<8} {'行数':<8} {'首行字段'}")
-print("-" * 70)
 
-for api, params in APIS:
-    try:
-        r = requests.post(BASE_URL, json={
-            "api_name": api,
-            "token": TOKEN,
-            "params": params,
-            "fields": ""
-        }, timeout=(10, 30))
-        j = r.json()
-        c = j.get("code")
-        if c == 0:
-            items = j.get("data", {}).get("items", [])
-            fields = j.get("data", {}).get("fields", [])[:4]
-            print(f"OK  {api:<25} {len(items):>8}行  {fields}")
-        elif c == 40101:
-            print(f"NO  {api:<25}  无权限")
-        elif c == -1:
-            print(f"SYS {api:<25}  系统错误")
-        else:
-            msg = j.get("msg", "")[:40]
-            print(f"ERR {api:<25}  code={c}  {msg}")
-    except Exception as e:
-        print(f"EX  {api:<25}  {str(e)[:50]}")
+def main() -> None:
+    token = resolve_token()
+    print(f"using token prefix: {token[:8]}")
+    print(f"{'API':<25} {'status':<8} {'rows':<8} {'fields'}")
+    print("-" * 90)
+    for api_name, params in APIS:
+        try:
+            frame = fetch_tushare_dataframe(api_name, params=params, retries=2)
+            _print_ok(api_name, frame)
+        except Exception as exc:
+            print(f"ERR {api_name:<25} {type(exc).__name__}: {str(exc)[:50]}")
+
+
+def _print_ok(api_name: str, frame: pd.DataFrame) -> None:
+    preview = list(frame.columns[:4]) if not frame.empty else []
+    print(f"OK  {api_name:<25} {len(frame):>8} {preview}")
+
+
+if __name__ == "__main__":
+    main()

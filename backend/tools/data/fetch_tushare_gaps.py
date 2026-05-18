@@ -6,17 +6,16 @@ Tushare 缺口数据完整采集脚本 v2
 import os
 import time
 import datetime
-import requests
 import duckdb
 import pandas as pd
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.data.paths import resolve_data_dir, resolve_duckdb_path
+from tushare_client import fetch_tushare_dataframe, resolve_token
 
 # ============ 配置 ============
-TOKEN = "c8c7d9ef93bdcf19fd48104716bec17f84443558faf197b54ba624a8"
-BASE_URL = "http://tsy.xiaodefa.cn"
+TOKEN = resolve_token()
 DATA_DIR = resolve_data_dir()
 DB_PATH = resolve_duckdb_path()
 CSV_DIR = DATA_DIR / "akshare_fetch"
@@ -32,17 +31,13 @@ _STOCK_LIST = None
 def get_stock_list():
     global _STOCK_LIST
     if _STOCK_LIST is None:
-        r = requests.post(BASE_URL, json={
-            "api_name": "stock_basic",
-            "token": TOKEN,
-            "params": {"ts_code": "", "list_status": "L"},
-            "fields": "ts_code"
-        }, timeout=60)
-        j = r.json()
-        if j.get("code") == 0:
-            _STOCK_LIST = [row[0] for row in j["data"]["items"]]
-        else:
-            _STOCK_LIST = []
+        frame = fetch_tushare_dataframe(
+            "stock_basic",
+            params={"ts_code": "", "list_status": "L"},
+            fields="ts_code",
+            token=TOKEN,
+        )
+        _STOCK_LIST = frame["ts_code"].dropna().astype(str).tolist() if "ts_code" in frame.columns else []
     return _STOCK_LIST
 
 
@@ -205,26 +200,16 @@ def _gen_month_ranges(start_date, end_date):
 
 def fetch_tushare(api_name, params=None, fields="", retries=5):
     """通用 Tushare API 调用"""
-    for i in range(retries):
-        try:
-            r = requests.post(
-                BASE_URL,
-                json={"api_name": api_name, "token": TOKEN, "params": params or {}, "fields": fields},
-                timeout=(10, 60),
-            )
-            j = r.json()
-            if j.get("code") == 0:
-                data = j.get("data", {})
-                df = pd.DataFrame(data.get("items", []), columns=data.get("fields", []))
-                return df
-            elif j.get("code") == 40101:
-                return pd.DataFrame()  # 无权限
-            else:
-                return pd.DataFrame()
-        except Exception as e:
-            if i < retries - 1:
-                time.sleep(3)
-    return pd.DataFrame()
+    try:
+        return fetch_tushare_dataframe(
+            api_name,
+            params=params,
+            fields=fields,
+            retries=retries,
+            token=TOKEN,
+        )
+    except Exception:
+        return pd.DataFrame()
 
 
 def save_duckdb(df, table_name):
@@ -294,17 +279,15 @@ def main():
 
     # 检查 token
     print("\n[Token 验证]")
-    r = requests.post(BASE_URL, json={
-        "api_name": "trade_cal",
-        "token": TOKEN,
-        "params": {"exchange": "SSE", "start_date": "20240101", "end_date": "20240101"},
-        "fields": ""
-    }, timeout=60)
-    j = r.json()
-    if j.get("code") == 0:
+    token_check = fetch_tushare(
+        "trade_cal",
+        {"exchange": "SSE", "start_date": "20240101", "end_date": "20240101"},
+        retries=2,
+    )
+    if not token_check.empty:
         print("  Token 验证通过")
     else:
-        print(f"  Token 错误: {j.get('msg', '')}")
+        print("  Token 验证失败或无权限")
         return
 
     # 无参数接口（一次拉完）

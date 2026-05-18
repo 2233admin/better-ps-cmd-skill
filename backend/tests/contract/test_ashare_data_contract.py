@@ -38,6 +38,7 @@ def test_runtime_and_active_scripts_do_not_hardcode_old_duckdb_root():
         root / "backend" / "tools" / "data" / "duckdb_catalog.py",
         root / "backend" / "run_backtest.py",
         root / "scripts" / "export-ashare-duckdb-to-lake.py",
+        root / "scripts" / "sync-ashare-pit-to-duckdb.py",
     ]
 
     for path in targets:
@@ -67,8 +68,8 @@ def test_data_paths_resolve_from_env_or_repo_local(monkeypatch):
     monkeypatch.delenv("KATANA_ASHARE_DUCKDB_PATH", raising=False)
 
     assert default_data_dir() == project_root() / "DATA"
-    assert default_ashare_data_dir() == project_root() / "DATA" / "ashare"
-    assert default_ashare_lake_root() == project_root() / "DATA" / "ashare" / "lake"
+    assert default_ashare_data_dir() == project_root() / "DATA" / "Ashare"
+    assert default_ashare_lake_root() == project_root() / "DATA" / "Ashare"
     assert resolve_data_dir() == default_data_dir().resolve()
     assert resolve_ashare_data_dir() == default_ashare_data_dir().resolve()
     assert resolve_ashare_lake_root() == default_ashare_lake_root().resolve()
@@ -121,6 +122,18 @@ def test_complete_price_bar_pit_contract_passes():
 
     assert result.passed
     assert result.missing_columns == ()
+
+
+def test_market_cap_and_industry_pit_contracts_pass():
+    from app.research.ashare_data_contract import (
+        ASharePITDataset,
+        INDUSTRY_DAILY_COLUMNS,
+        MARKET_CAP_DAILY_COLUMNS,
+        validate_pit_columns,
+    )
+
+    assert validate_pit_columns(ASharePITDataset.MARKET_CAP_DAILY, MARKET_CAP_DAILY_COLUMNS).passed
+    assert validate_pit_columns(ASharePITDataset.INDUSTRY_DAILY, INDUSTRY_DAILY_COLUMNS).passed
 
 
 def test_tradability_status_contract_requires_execution_reality_columns():

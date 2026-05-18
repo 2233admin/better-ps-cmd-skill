@@ -72,6 +72,25 @@ uv run python ..\scripts\ingest-ashare-bridge.py `
 
 ## Validation And Coverage
 
+For the existing local lake, prefer the data-lake control entry point:
+
+```powershell
+cd C:\Users\Administrator\projects\k-atana
+uv run --project backend python scripts\ashare-datactl.py build-local `
+  --data-root DATA\Ashare `
+  --date 2026-05-18
+```
+
+This runs the local-only closure path:
+
+```text
+ensure dirs -> export index PIT -> normalize existing TDX raw snapshots
+-> build backtest feature view -> coverage -> factor readiness
+```
+
+It deliberately does not call TDX. Use `download-tdx-raw` explicitly when a new
+raw snapshot is needed.
+
 Validate the lake:
 
 ```powershell
@@ -142,15 +161,17 @@ TDX/Lake -> validate -> coverage -> calendar -> world_snapshot
 -> research pipeline -> backtest tables -> benchmark -> gate report
 ```
 
-DuckDB is not part of this acceptance path. The canonical A-share research
-input is the PIT parquet lake under `<lake-root>/pit/`; local DuckDB files remain
-legacy/tooling cache until a separate migration promotes them with PIT contracts.
+DuckDB is not the canonical storage layer, but it is part of the local query
+path. The current A-share lake is hybrid under `<lake-root>/pit/`: daily kline
+bars remain Parquet, while high-churn sidecars can live as Delta tables managed
+by `delta-rs`. Local DuckDB files remain cache/tooling state until a separate
+migration promotes them with PIT contracts.
 
 If historical A-share bars still live in a local DuckDB file, export them into
 the lake first:
 
 ```powershell
-$env:KATANA_ASHARE_DATA_DIR = "C:\Users\Administrator\projects\k-atana\DATA\ashare"
+$env:KATANA_ASHARE_DATA_DIR = "C:\Users\Administrator\projects\k-atana\DATA\Ashare"
 uv run python ..\scripts\export-ashare-duckdb-to-lake.py `
   --start 2026-04-01 `
   --end 2026-05-16
@@ -159,17 +180,32 @@ uv run python ..\scripts\export-ashare-duckdb-to-lake.py `
 That export path is a migration bridge only. It does not make DuckDB the
 control-plane fact source.
 
+When the PIT lake is already accepted and the legacy DuckDB cache needs to
+catch up for fallback tooling, sync the accepted PIT rows back into
+`main.tdx_daily`:
+
+```powershell
+uv run python ..\scripts\sync-ashare-pit-to-duckdb.py `
+  --start 2026-04-30 `
+  --end 2026-05-18 `
+  --json
+```
+
+This cache sync is idempotent: it deletes matching `symbol,date` rows in
+DuckDB before inserting the PIT rows. It must run after PIT validation and
+coverage, not before.
+
 If `KATANA_ASHARE_DUCKDB_PATH` is unset, the exporter first looks for:
 
 ```text
-<repo>/DATA/ashare/Aquant.duckdb
-<repo>/DATA/ashare/ashare.duckdb
+<repo>/DATA/Ashare/Aquant.duckdb
+<repo>/DATA/Ashare/ashare.duckdb
 ```
 
 If `KATANA_ASHARE_LAKE_ROOT` is unset, the default lake root is:
 
 ```text
-<repo>/DATA/ashare/lake
+<repo>/DATA/Ashare
 ```
 
 Run it from the repo root:
@@ -220,3 +256,216 @@ scan_results.parquet
 
 Per-symbol backtest directories are only written with
 `--artifact-level full` or `-FullArtifacts`.
+
+## xtdata / MiniQMT Ingest
+
+xtdata is a supplemental ingress path, not a research data source. The order is:
+
+```text
+xtdata download -> xtdata extract -> xtdata normalize -> xtdata promote -> PIT Lake
+```
+
+Daily bars are the only promoted period in this phase. The supported xtdata
+adjustment labels are `none`, `front`, `back`, `front_ratio`, and `back_ratio`.
+The promoted daily dataset remains:
+
+```text
+DATA/Ashare/pit/kline_daily_pit.parquet
+```
+
+Example:
+
+```powershell
+cd C:\Users\Administrator\projects\k-atana\backend
+uv run python ..\scripts\ingest-ashare-xtdata.py download `
+  --symbols 600000.SH,000001.SZ `
+  --start 20260401 `
+  --end 20260430 `
+  --period 1d `
+  --adjust none
+
+uv run python ..\scripts\ingest-ashare-xtdata.py extract `
+  --symbols 600000.SH,000001.SZ `
+  --start 20260401 `
+  --end 20260430 `
+  --out-parquet ..\DATA\Ashare\normalized\xtdata\kline_daily_batch.parquet
+
+uv run python ..\scripts\ingest-ashare-xtdata.py promote `
+  --batch-parquet ..\DATA\Ashare\normalized\xtdata\kline_daily_batch.parquet `
+  --out-root ..\DATA\Ashare
+```
+
+Tick and minute periods are intentionally blocked from this daily path. When
+they are added, they must land in `tick_trade_pit` and `kline_minute_pit`
+contracts first.
+
+## TDX Snapshot Evidence
+
+TDX finance and block files are useful evidence, but they are current snapshots,
+not historical PIT streams. Keep them out of historical backtests until an
+announcement/effective-date normalizer promotes them with explicit visibility
+windows.
+
+Download raw snapshot evidence:
+
+```powershell
+cd C:\Users\Administrator\projects\k-atana\backend
+uv run python ..\scripts\download-ashare-tdx-raw.py `
+  --data-root ..\DATA\Ashare `
+  --run-id 20260518 `
+  --symbol-scope all `
+  --json
+```
+
+Normalize the raw JSON files into queryable parquet:
+
+```powershell
+uv run python ..\scripts\normalize-ashare-tdx-snapshots.py `
+  --data-root ..\DATA\Ashare `
+  --run-id 20260518 `
+  --json
+```
+
+Outputs:
+
+```text
+DATA/Ashare/normalized/tdx/finance_snapshot_20260518.parquet
+DATA/Ashare/normalized/tdx/block_membership_20260518.parquet
+DATA/Ashare/_manifest/tdx_finance_snapshot_20260518.json
+DATA/Ashare/_manifest/tdx_block_membership_20260518.json
+DATA/Ashare/_manifest/tdx_normalized_20260518.json
+```
+
+Both normalized datasets set `research_eligible=false` in their manifests.
+
+## Backtest Feature View
+
+For routine backtests, materialize one PIT-safe feature view instead of making
+each run re-join daily bars, tradability status, and adjustment factors:
+
+```powershell
+cd C:\Users\Administrator\projects\k-atana\backend
+uv run python ..\scripts\build-ashare-backtest-view.py `
+  --data-root ..\DATA\Ashare `
+  --json
+```
+
+Current output:
+
+```text
+DATA/Ashare/features/backtest_daily_pit_20260518.parquet
+DATA/Ashare/_manifest/backtest_daily_pit_20260518.json
+```
+
+Use it directly as pipeline input:
+
+```powershell
+uv run python -m app.research.pipeline.cli `
+  --date 2026-05-18 `
+  --pit-parquet ..\DATA\Ashare\features\backtest_daily_pit_20260518.parquet `
+  --symbols 600000.SH,000001.SZ `
+  --out ..\DATA\Ashare\experiments\pipeline_20260518_backtest_view_smoke `
+  --code-commit backtest-view
+```
+
+The view keeps `available_at` and `source_updated_at`, so the pipeline still
+filters rows by the package date. It includes raw execution prices and
+`adjusted_close` for factor calculation. It also includes price-derived
+`limit_up_proxy` and `limit_down_proxy` columns, used only when no visible PIT
+status row is available. TDX finance/block snapshot parquets are not joined
+because they are not historical PIT datasets.
+
+## Factor Data Readiness
+
+Check which factor granularities are safe for historical testing:
+
+```powershell
+uv run python ..\scripts\check-ashare-factor-data-readiness.py `
+  --data-root ..\DATA\Ashare `
+  --json
+```
+
+Current readiness after syncing ChinaData status plus factor sidecars is:
+
+```text
+price factors: ready
+benchmark indices: ready
+limit up/down: ready
+historical tradability: ready
+market cap/free float: ready
+industry/block membership: ready
+financial statements: missing PIT
+```
+
+The report is written to:
+
+```text
+DATA/Ashare/_manifest/factor_data_readiness.json
+```
+
+## ChinaData Factor Sidecars
+
+The paid ChinaData/Tushare path is used to fill the daily fields that TDX does
+not carry well enough for factor research. The current sidecar mapping is:
+
+```text
+daily_basic -> pit/market_cap_daily_pit/
+bak_daily -> pit/industry_daily_pit/
+share_float -> pit/share_float_event_pit/
+```
+
+Sync them explicitly:
+
+```powershell
+cd C:\Users\Administrator\projects\k-atana
+uv run --project backend python scripts\ashare-datactl.py sync-chinadata-factors `
+  --data-root DATA\Ashare `
+  --start 2016-01-01 `
+  --end 2026-05-18 `
+  --json
+```
+
+Current real output on the local lake:
+
+```text
+market_cap_daily_pit: 750,000 rows, 5,755 symbols, 2016-01-27 -> 2026-05-18
+industry_daily_pit: 756,000 rows, 5,766 symbols, 2017-06-28 -> 2026-05-18
+share_float_event_pit: 58,765 rows, 171 symbols, 2016-12-28 -> 2026-05-18
+```
+
+`build-ashare-backtest-view.py` now joins visible `market_cap_daily_pit` and
+`industry_daily_pit` rows from either Delta or Parquet into
+`backtest_daily_pit_YYYYMMDD.parquet`, so the default factor-backtest entry
+surface already carries:
+
+```text
+turnover_rate, turnover_rate_f, volume_ratio
+pe, pe_ttm, pb, ps, ps_ttm, dv_ratio, dv_ttm
+total_share, float_share, free_share, total_mv, circ_mv
+name, industry, area
+```
+
+`share_float_event_pit` stays separate because it is an event stream, not a
+daily snapshot. Flattening it into the daily view would blur announcement-time
+semantics.
+
+## Index Benchmarks
+
+Benchmark indices are exported from the legacy DuckDB cache into PIT parquet:
+
+```powershell
+uv run python ..\scripts\export-ashare-index-duckdb-to-lake.py `
+  --db-path ..\DATA\Ashare\Aquant.duckdb `
+  --out-root ..\DATA\Ashare `
+  --json
+```
+
+Current output:
+
+```text
+DATA/Ashare/pit/index_daily_pit.parquet
+DATA/Ashare/_manifest/index_daily_pit.json
+```
+
+Included symbols: `000001.SH`, `399001.SZ`, `399006.SZ`, `000300.SH`,
+`000905.SH`, and `000852.SH`.

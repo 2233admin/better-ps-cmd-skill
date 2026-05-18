@@ -87,7 +87,7 @@ A-share active surface:
 - `backend/tests/integration/test_easyxt_bridge_contract.py`
 - Canonical research/control input: PIT parquet lake under `<lake-root>/pit/`
 - Default project-local data root: `<repo>/DATA/`
-- Default project-local A-share root: `<repo>/DATA/ashare/`
+- Default project-local A-share root: `<repo>/DATA/Ashare/`
 - External data lake: `/srv/lan-ai/data/ashare`
 - External checks: `/srv/lan-ai/artifacts/ashare-data-checks`
 

@@ -15,9 +15,14 @@ class DatasetTier(str, Enum):
 class ASharePITDataset(str, Enum):
     KLINE_DAILY = "ashare.kline_daily_pit"
     KLINE_MINUTE = "ashare.kline_minute_pit"
+    TICK_TRADE = "ashare.tick_trade_pit"
     TRADABILITY_STATUS = "ashare.tradability_status_pit"
     INSTRUMENT_STATUS = "ashare.instrument_status_pit"
     ADJUSTMENT_FACTOR = "ashare.adjustment_factor_pit"
+    INDEX_DAILY = "ashare.index_daily_pit"
+    MARKET_CAP_DAILY = "ashare.market_cap_daily_pit"
+    INDUSTRY_DAILY = "ashare.industry_daily_pit"
+    SHARE_FLOAT_EVENT = "ashare.share_float_event_pit"
 
 
 class AShareBlockedDataset(str, Enum):
@@ -86,12 +91,74 @@ ADJUSTMENT_FACTOR_COLUMNS = frozenset(
     }
 )
 
+MARKET_CAP_DAILY_COLUMNS = frozenset(
+    {
+        "symbol",
+        "market",
+        "event_time",
+        "available_at",
+        "source_updated_at",
+        "total_share",
+        "float_share",
+        "free_share",
+        "total_mv",
+        "circ_mv",
+    }
+)
+
+INDUSTRY_DAILY_COLUMNS = frozenset(
+    {
+        "symbol",
+        "market",
+        "event_time",
+        "available_at",
+        "source_updated_at",
+        "industry",
+        "area",
+    }
+)
+
+SHARE_FLOAT_EVENT_COLUMNS = frozenset(
+    {
+        "symbol",
+        "market",
+        "event_time",
+        "available_at",
+        "source_updated_at",
+        "ann_date",
+        "float_share",
+        "float_ratio",
+        "holder_name",
+        "share_type",
+    }
+)
+
+TICK_TRADE_COLUMNS = frozenset(
+    {
+        "symbol",
+        "market",
+        "event_time",
+        "available_at",
+        "source_updated_at",
+        "price",
+        "volume",
+        "amount",
+        "trade_id",
+        "side",
+    }
+)
+
 REQUIRED_COLUMNS_BY_DATASET = {
     ASharePITDataset.KLINE_DAILY: PRICE_BAR_COLUMNS,
     ASharePITDataset.KLINE_MINUTE: PRICE_BAR_COLUMNS,
+    ASharePITDataset.TICK_TRADE: TICK_TRADE_COLUMNS,
     ASharePITDataset.TRADABILITY_STATUS: TRADABILITY_STATUS_COLUMNS,
     ASharePITDataset.INSTRUMENT_STATUS: TRADABILITY_STATUS_COLUMNS,
     ASharePITDataset.ADJUSTMENT_FACTOR: ADJUSTMENT_FACTOR_COLUMNS,
+    ASharePITDataset.INDEX_DAILY: PRICE_BAR_COLUMNS,
+    ASharePITDataset.MARKET_CAP_DAILY: MARKET_CAP_DAILY_COLUMNS,
+    ASharePITDataset.INDUSTRY_DAILY: INDUSTRY_DAILY_COLUMNS,
+    ASharePITDataset.SHARE_FLOAT_EVENT: SHARE_FLOAT_EVENT_COLUMNS,
 }
 
 

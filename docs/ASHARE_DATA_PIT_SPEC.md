@@ -21,6 +21,15 @@ Local DuckDB tables are legacy cache/tooling only. They are not a production
 research fact source unless they are exported, normalized, and accepted as PIT
 parquet lake artifacts.
 
+Daily A-share source priority is:
+
+```text
+PIT Lake > DuckDB cache > xtdata/QMT ingest > TDXCLIrs fallback
+```
+
+xtdata/QMT may supplement missing bars, but it must land in PIT parquet before
+research code can read it.
+
 ## Dataset Tiers
 
 `raw`
@@ -107,6 +116,21 @@ volume
 amount
 ```
 
+`ashare.tick_trade_pit`
+
+```text
+symbol
+market
+event_time
+available_at
+source_updated_at
+price
+volume
+amount
+trade_id
+side
+```
+
 `ashare.tradability_status_pit`
 
 ```text
@@ -136,21 +160,98 @@ adjustment_type
 factor
 ```
 
+`ashare.index_daily_pit`
+
+```text
+symbol
+market
+event_time
+available_at
+source_updated_at
+open
+high
+low
+close
+volume
+amount
+```
+
+`ashare.market_cap_daily_pit`
+
+```text
+symbol
+market
+event_time
+available_at
+source_updated_at
+turnover_rate
+turnover_rate_f
+volume_ratio
+pe
+pe_ttm
+pb
+ps
+ps_ttm
+dv_ratio
+dv_ttm
+total_share
+float_share
+free_share
+total_mv
+circ_mv
+```
+
+`ashare.industry_daily_pit`
+
+```text
+symbol
+market
+event_time
+available_at
+source_updated_at
+name
+industry
+area
+```
+
+`ashare.share_float_event_pit`
+
+```text
+symbol
+market
+event_time
+available_at
+source_updated_at
+ann_date
+float_share
+float_ratio
+holder_name
+share_type
+```
+
 ## Blocked Until PIT Metadata Exists
 
 These datasets must not feed production experiments until they have explicit
 `available_at` semantics:
 
 - financial statements
-- fundamentals and valuation ratios
 - index constituents
-- industry classification
-- ST status
-- suspension status
-- limit-up/limit-down state
 - corporate actions and adjustment factors
 - policy/news/macro release calendars
 - northbound flow if release timestamp is missing
+
+The current A-share PIT lake already promotes these once-blocked daily layers
+with conservative visibility semantics:
+
+- `ashare.market_cap_daily_pit`
+- `ashare.industry_daily_pit`
+- `ashare.tradability_status_pit`
+- `ashare.adjustment_factor_pit`
+
+Backtest feature views may include proxy columns derived only from PIT-safe
+price bars, such as `limit_up_proxy` and `limit_down_proxy`. Proxies must be
+named as proxies and documented in the run manifest; they do not replace
+official historical exchange status feeds.
 
 ## Query Rule
 

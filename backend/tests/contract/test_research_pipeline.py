@@ -1247,6 +1247,17 @@ def test_ashare_lake_scripts_validate_and_build_coverage(tmp_path):
     parquet = root / "pit" / "kline_daily_pit.parquet"
     parquet.parent.mkdir(parents=True)
     _pit_frame().write_parquet(parquet)
+    pl.DataFrame(
+        {
+            "symbol": ["600000.SH"],
+            "market": ["SH"],
+            "event_time": [datetime(2026, 4, 3, tzinfo=UTC)],
+            "available_at": [datetime(2026, 4, 3, tzinfo=UTC)],
+            "source_updated_at": [datetime(2026, 4, 3, tzinfo=UTC)],
+            "adjustment_type": ["qfq_denominator"],
+            "factor": [1.0],
+        }
+    ).write_parquet(root / "pit" / "adjustment_factor_pit.parquet")
 
     scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
     validate_module = _load_script(scripts_dir / "validate-ashare-lake.py")
@@ -1258,6 +1269,10 @@ def test_ashare_lake_scripts_validate_and_build_coverage(tmp_path):
     manifest = json.loads((root / "_manifest" / "coverage.json").read_text(encoding="utf-8"))
     assert manifest["items"][0]["dataset"] == "ashare.kline_daily_pit"
     assert manifest["items"][0]["path"] == "pit/kline_daily_pit.parquet"
+    assert {item["dataset"] for item in manifest["items"]} >= {
+        "ashare.kline_daily_pit",
+        "ashare.adjustment_factor_pit",
+    }
 
 
 def test_ashare_calendar_snapshot_is_built_from_lake_observed_days(tmp_path):
@@ -1627,6 +1642,106 @@ def test_ashare_tradability_producer_writes_pit_parquet(tmp_path):
     assert any("is_suspended" in gap for gap in universe["honest_gaps"])
 
 
+def test_ashare_tradability_producer_marks_history_inactive_symbols(tmp_path):
+    import duckdb
+
+    from app.research.ashare_data_contract import (
+        ASharePITDataset,
+        validate_pit_columns,
+    )
+
+    db_path = tmp_path / "Aquant.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE tdx_daily (
+            symbol VARCHAR,
+            date DATE,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            amount DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO tdx_daily VALUES
+        ('sh600000', '2026-05-18', 10.0, 10.2, 9.9, 10.1, 100, 1010.0),
+        ('sh600999', '2026-04-30', 8.0, 8.1, 7.9, 8.0, 80, 640.0),
+        ('sz000001', '2026-05-17', 12.0, 12.2, 11.9, 12.1, 120, 1452.0)
+        """
+    )
+    conn.close()
+
+    sh_fixture = tmp_path / "sh.json"
+    sh_fixture.write_text(
+        json.dumps(
+            {
+                "market": "sh",
+                "items": [{"code": "600000", "name": "浦发银行", "market": "SH"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    sz_fixture = tmp_path / "sz.json"
+    sz_fixture.write_text(
+        json.dumps(
+            {
+                "market": "sz",
+                "items": [
+                    {"code": "000001", "name": "平安银行", "market": "SZ"},
+                    {"code": "003999", "name": "新股无K线", "market": "SZ"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    lake = tmp_path / "lake"
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    module = _load_script(scripts_dir / "ingest-ashare-tradability.py")
+    assert (
+        module.main(
+            [
+                "--security-list-json",
+                str(sh_fixture),
+                "--security-list-json",
+                str(sz_fixture),
+                "--out-root",
+                str(lake),
+                "--event-time",
+                "2026-05-18",
+                "--duckdb-path",
+                str(db_path),
+                "--equity-only",
+                "--include-history-inactive",
+            ]
+        )
+        == 0
+    )
+
+    frame = pl.read_parquet(lake / "pit" / "tradability_status_pit.parquet")
+    check = validate_pit_columns(ASharePITDataset.TRADABILITY_STATUS, frame.columns)
+    assert check.passed, f"missing required columns: {check.missing_columns}"
+
+    by_symbol = {row["symbol"]: row for row in frame.iter_rows(named=True)}
+    assert by_symbol["600000.SH"]["is_tradable"] is True
+    assert by_symbol["600000.SH"]["listed_days"] > 0
+    assert by_symbol["000001.SZ"]["is_tradable"] is False
+    assert "no_same_day_bar" in by_symbol["000001.SZ"]["reason"]
+    assert by_symbol["003999.SZ"]["is_tradable"] is False
+    assert "no_same_day_bar" in by_symbol["003999.SZ"]["reason"]
+    assert by_symbol["600999.SH"]["is_tradable"] is False
+    assert "inactive_or_delisted_inferred" in by_symbol["600999.SH"]["reason"]
+
+    universe = json.loads((lake / "_manifest" / "tradability_universe.json").read_text(encoding="utf-8"))
+    assert universe["history_rows"] == 3
+    assert universe["inferred_inactive_rows"] == 1
+
+
 def test_ashare_xdxr_producer_writes_adjustment_and_corporate_action(tmp_path):
     from app.research.ashare_data_contract import (
         ASharePITDataset,
@@ -1645,7 +1760,7 @@ def test_ashare_xdxr_producer_writes_adjustment_and_corporate_action(tmp_path):
                 "market": 1,
                 "code": "600000",
                 "date": 20250604,
-                "category": 1,
+                "category": "ChuquanChuxi",
                 "fh_qltp": 1.5,
                 "pgj_qzgb": 0.0,
                 "sg_hltp": 0.0,
@@ -1698,6 +1813,44 @@ def test_ashare_xdxr_producer_writes_adjustment_and_corporate_action(tmp_path):
     )
     assert universe["rows"]["adjustment_factor"] == 2
     assert universe["per_symbol_counts"] == {"600000.SH": 2}
+
+
+def test_ashare_xdxr_producer_reads_tdxcli_cache_parquet(tmp_path):
+    from app.research.ashare_data_contract import (
+        ASharePITDataset,
+        validate_pit_columns,
+    )
+
+    cache = tmp_path / "xdxr-cache"
+    cache.mkdir()
+    pl.DataFrame(
+        {
+            "market": ["sh", "sh"],
+            "code": ["600000", "600000"],
+            "name": ["浦发银行", "浦发银行"],
+            "date": [date(2025, 6, 4), date(2025, 6, 5)],
+            "category": [1, 5],
+            "fh_qltp_i64": [15000, 1000000],
+            "pgj_qzgb_i64": [0, 1000000],
+            "sg_hltp_i64": [50000, 2000000],
+            "pg_hzgb_i64": [20000, 3000000],
+        }
+    ).write_parquet(cache / "part-000001.parquet")
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    module = _load_script(scripts_dir / "ingest-ashare-xdxr.py")
+    lake = tmp_path / "lake"
+    assert module.main(["--xdxr-cache-dir", str(cache), "--out-root", str(lake)]) == 0
+
+    adjustment = pl.read_parquet(lake / "pit" / "adjustment_factor_pit.parquet")
+    action = pl.read_parquet(lake / "pit" / "corporate_action_pit.parquet")
+    check = validate_pit_columns(ASharePITDataset.ADJUSTMENT_FACTOR, adjustment.columns)
+    assert check.passed, f"missing required columns: {check.missing_columns}"
+    assert adjustment.height == 1
+    assert adjustment.row(0, named=True)["factor"] == 1.0 + 5.0 + 2.0
+    assert action.height == 2
+    assert action.filter(pl.col("category") == "guben_bianhua").height == 1
+    assert action.filter(pl.col("category") == "chuquan_chuxi").row(0, named=True)["cash_per_share"] == 1.5
 
 
 def test_duckdb_export_script_migrates_legacy_daily_bars_into_pit_lake(tmp_path):
@@ -1760,8 +1913,157 @@ def test_duckdb_export_script_migrates_legacy_daily_bars_into_pit_lake(tmp_path)
     assert frame["symbol"].to_list() == ["000001.SZ", "600000.SH"]
     assert frame["market"].to_list() == ["SZ", "SH"]
     assert all(value.hour == 9 and value.minute == 30 for value in frame["available_at"].to_list())
-    assert universe["source"] == "legacy_duckdb_export"
+    assert universe["source"] == "legacy_duckdb_export:kline_daily"
     assert coverage["items"][0]["dataset"] == "ashare.kline_daily_pit"
+
+
+def test_duckdb_export_script_migrates_tdx_daily_into_pit_lake(tmp_path):
+    import duckdb
+
+    root = tmp_path / "lake"
+    db_path = tmp_path / "legacy.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE tdx_daily (
+            symbol VARCHAR,
+            date DATE,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            amount DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO tdx_daily VALUES
+        ('sh600000', '2026-04-03', 10.0, 10.2, 9.9, 10.1, 100, 1010.0),
+        ('sz000001', '2026-04-03', 12.0, 12.2, 11.9, 12.1, 120, 1452.0),
+        ('bj920001', '2026-04-03', 8.0, 8.2, 7.9, 8.1, 80, 648.0),
+        ('sh000001', '2026-04-03', 3000.0, 3010.0, 2990.0, 3001.0, 1, 1.0)
+        """
+    )
+    conn.close()
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    export_module = _load_script(scripts_dir / "export-ashare-duckdb-to-lake.py")
+
+    assert (
+        export_module.main(
+            [
+                "--db-path",
+                str(db_path),
+                "--out-root",
+                str(root),
+                "--start",
+                "2026-04-03",
+                "--end",
+                "2026-04-03",
+            ]
+        )
+        == 0
+    )
+
+    frame = pl.read_parquet(root / "pit" / "kline_daily_pit.parquet")
+    universe = json.loads((root / "_manifest" / "universe_manifest.json").read_text(encoding="utf-8"))
+
+    assert frame["symbol"].to_list() == ["000001.SZ", "600000.SH", "920001.BJ"]
+    assert frame["market"].to_list() == ["SZ", "SH", "BJ"]
+    assert universe["source"] == "legacy_duckdb_export:tdx_daily"
+
+
+def test_pit_to_duckdb_sync_updates_legacy_tdx_daily_cache(tmp_path):
+    import duckdb
+
+    db_path = tmp_path / "legacy.duckdb"
+    pit_path = tmp_path / "kline_daily_pit.parquet"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE tdx_daily (
+            symbol VARCHAR,
+            date DATE,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            amount DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO tdx_daily VALUES
+        ('sh600000', '2026-04-29', 9.0, 9.0, 9.0, 9.0, 9, 9.0),
+        ('sh600000', '2026-04-30', 1.0, 1.0, 1.0, 1.0, 1, 1.0)
+        """
+    )
+    conn.close()
+
+    pit = pl.DataFrame(
+        [
+            {
+                "symbol": "600000.SH",
+                "event_time": datetime(2026, 4, 30, tzinfo=UTC),
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "volume": 100,
+                "amount": 1010.0,
+            },
+            {
+                "symbol": "000001.SZ",
+                "event_time": datetime(2026, 4, 30, tzinfo=UTC),
+                "open": 12.0,
+                "high": 12.2,
+                "low": 11.9,
+                "close": 12.1,
+                "volume": 120,
+                "amount": 1452.0,
+            },
+        ]
+    )
+    pit.write_parquet(pit_path)
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    sync_module = _load_script(scripts_dir / "sync-ashare-pit-to-duckdb.py")
+
+    assert (
+        sync_module.main(
+            [
+                "--db-path",
+                str(db_path),
+                "--pit-path",
+                str(pit_path),
+                "--start",
+                "2026-04-30",
+                "--end",
+                "2026-04-30",
+            ]
+        )
+        == 0
+    )
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    rows = conn.execute(
+        """
+        SELECT symbol, date, open, close, volume, amount
+        FROM tdx_daily
+        ORDER BY date, symbol
+        """
+    ).fetchall()
+    conn.close()
+
+    assert rows == [
+        ("sh600000", date(2026, 4, 29), 9.0, 9.0, 9, 9.0),
+        ("sh600000", date(2026, 4, 30), 10.0, 10.1, 100, 1010.0),
+        ("sz000001", date(2026, 4, 30), 12.0, 12.1, 120, 1452.0),
+    ]
 
 
 def _load_script(path: Path):

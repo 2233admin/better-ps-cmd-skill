@@ -25,7 +25,7 @@ def resolve_data_dir() -> Path:
 
 
 def default_ashare_data_dir() -> Path:
-    return default_data_dir() / "ashare"
+    return default_data_dir() / "Ashare"
 
 
 def resolve_ashare_data_dir() -> Path:
@@ -35,7 +35,7 @@ def resolve_ashare_data_dir() -> Path:
 
 
 def default_ashare_lake_root() -> Path:
-    return resolve_ashare_data_dir() / "lake"
+    return resolve_ashare_data_dir()
 
 
 def resolve_ashare_lake_root() -> Path:

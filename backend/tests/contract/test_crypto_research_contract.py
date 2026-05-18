@@ -27,7 +27,7 @@ def test_crypto_wheel_admission_policy_defaults_unknown_wheels_to_reject():
     assert policy.default_decision == "reject"
     assert policy.decision_for("unknown-grid-bot") == "reject"
     assert policy.decision_for("requests") == "allow"
-    assert policy.decision_for("ccxt") == "candidate"
+    assert policy.decision_for("ccxt") == "allow"
     assert policy.decision_for("freqtrade") == "reference_only"
     assert "places_orders_without_katana_intent" in policy.banned_capabilities
 

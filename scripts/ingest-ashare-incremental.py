@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     lake_path = out_root / "pit" / "kline_daily_pit.parquet"
     previous_hash = _sha256_file(lake_path) if lake_path.exists() else ""
     existing = pl.read_parquet(lake_path) if lake_path.exists() else pl.DataFrame()
-    batch, source = _load_batch(args)
+    batch, source, universe = _load_batch(args)
     _validate_batch(batch)
     merged = _merge(existing, batch)
     lake_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     manifest_dir = out_root / "_manifest"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     _write_json(manifest_dir / "incremental_batch.json", manifest)
+    if universe:
+        _write_json(manifest_dir / "universe_manifest.json", _merged_universe_manifest(universe, merged))
     (manifest_dir / "previous_content_hash").write_text(previous_hash + "\n", encoding="utf-8")
     (manifest_dir / "new_content_hash").write_text(new_hash + "\n", encoding="utf-8")
     if args.json:
@@ -77,13 +79,13 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _load_batch(args: argparse.Namespace) -> tuple[pl.DataFrame, str]:
+def _load_batch(args: argparse.Namespace) -> tuple[pl.DataFrame, str, dict[str, Any]]:
     if args.batch_parquet:
         path = Path(args.batch_parquet)
-        return pl.read_parquet(path), str(path)
+        return pl.read_parquet(path), str(path), {}
     bridge = _load_bridge()
-    frame, _universe = bridge._normalize_scan_out_dir(Path(args.scan_out_dir))
-    return frame, str(args.scan_out_dir)
+    frame, universe = bridge._normalize_scan_out_dir(Path(args.scan_out_dir))
+    return frame, str(args.scan_out_dir), universe
 
 
 def _load_bridge() -> Any:
@@ -103,8 +105,34 @@ def _validate_batch(frame: pl.DataFrame) -> None:
 
 
 def _merge(existing: pl.DataFrame, batch: pl.DataFrame) -> pl.DataFrame:
-    frame = batch if existing.is_empty() else pl.concat([existing, batch], how="vertical_relaxed")
+    if existing.is_empty():
+        frame = batch
+    else:
+        existing, batch = _align_columns(existing, batch)
+        frame = pl.concat([existing, batch], how="vertical_relaxed")
     return frame.unique(subset=["symbol", "event_time"], keep="last").sort(["symbol", "event_time"])
+
+
+def _align_columns(left: pl.DataFrame, right: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    columns = list(dict.fromkeys([*left.columns, *right.columns]))
+    return _select_with_missing(left, columns), _select_with_missing(right, columns)
+
+
+def _select_with_missing(frame: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+    expressions = [
+        pl.col(column) if column in frame.columns else pl.lit(None).alias(column)
+        for column in columns
+    ]
+    return frame.select(expressions)
+
+
+def _merged_universe_manifest(universe: dict[str, Any], merged: pl.DataFrame) -> dict[str, Any]:
+    pit_symbols = sorted(str(symbol) for symbol in merged["symbol"].unique().to_list()) if merged.height else []
+    payload = dict(universe)
+    payload["source"] = f"incremental:{universe.get('source', '')}".rstrip(":")
+    payload["pit_symbols"] = {"count": len(pit_symbols), "symbols": pit_symbols}
+    payload["universe"] = {"count": len(pit_symbols), "symbols": pit_symbols}
+    return payload
 
 
 def _sha256_file(path: Path) -> str:
