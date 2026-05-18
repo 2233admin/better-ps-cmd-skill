@@ -119,9 +119,13 @@ Presence of *any one* is enough. Absence of *all* means use the wheel.
 - **XAR-420** — PyPortfolioOpt to fill portfolio-optimization gap, priority Medium
 - **XAR-421** — Strategic OpenBB overlap evaluation (terminal scope question), priority High
 - **XAR-422** — Track HKUDS/Vibe-Trading before building `app/ai_lab/trading/`, priority Low
-- **XAR-423** — ccxt + python-okx replace `data/okx_client.py` (also closes crypto funding/OI PIT gap), priority Urgent
+- **XAR-423** — ccxt + python-okx replace `data/okx_client.py` (also closes crypto funding/OI PIT gap), priority Urgent — **SPIKE DONE (`a8c18b8`), VERDICT ADOPT**
 - **XAR-424** — Evaluate TauricResearch/TradingAgents (76k★) before designing `ai_lab/trading/`, priority High
 - **XAR-425** — XAR-421 follow-up: OpenBB AGPLv3 license posture decision, priority High
+- **XAR-426** — Crypto rollout: ship the ccxt adapter, wire PIT backfill into ingest, retire `okx_client.py` (XAR-423 follow-up), priority Urgent
+- **XAR-427** — qlib spike unblock via py3.12 sub-venv (XAR-417 partial via `b190460` shows HYBRID; install was blocked on cp313), priority High
+- **XAR-428** — Data engineering: ingest A-share OHLCV + add `cap` field (unblocks Polars factor research, surfaced by `b94b38b` BLOCKED probe), priority High
+- **XAR-429** — Evaluate WonderTrader/wtpy + document CN quant ecosystem taxonomy (heavily-wrapped vs details-exposed), priority Medium
 
 Both have cheap-probe acceptance criteria; do not ship implementation until spikes complete.
 
@@ -172,6 +176,30 @@ Also caught two more graveyard inhabitants via install rate:
 **Process lesson #2:** I evaluated ecosystem with internal-knowledge searches even after switching to live API data. Asking Grok (xAI, different training data + browse access) for "what am I missing on the 2026 frontier" surfaced TradingAgents (76k★ — should have been impossible to miss) and confirmed AGPL risk on OpenBB. Independent-model second opinion is cheap and catches systematic blind spots.
 
 **Process lesson #3 — license is a signal that beats install rate:** freqtrade (GPL-3.0, 50k★, 2.4k/day) is technically active and popular, but practically graveyarded for any project that might be distributed. Same for OpenBB (AGPLv3 — *network* copyleft, even harder than GPL). Pin license in the triangulation, not just stars/push/installs.
+
+### CN A-share quant ecosystem taxonomy (added 2026-05-18 evening, Curry-surfaced)
+
+The CN quant trading platform landscape splits along an **abstraction axis**. Know which side a tool sits on before evaluating:
+
+**高度封装 (heavily wrapped)** — focus on `handle_bar` strategy logic, low-frequency market data:
+- **QMT / xtquant** (迅投) — docs: http://docs.thinktrader.net/. Used by k-atana's EasyXT bridge (see XAR-414, ACCOUNT_READER_MATRIX.md)
+- **PTrade** (中泰)
+- **掘金** (myquant)
+- **聚宽** (joinquant)
+
+Pros: fast to start, less boilerplate. Cons: less control over order callback states.
+
+**细节暴露 (details exposed)** — manage order callback states explicitly, high-frequency market data:
+- **CTP / CTP-mini** (上期所标准 futures API)
+- **华鑫奇点** (htsec single-point — equity HFT)
+- **中泰 XTP** (zhongtai XTP — equity HFT)
+
+Pros: full control + microstructure access. Cons: every callback needs state-machine handling.
+
+**Where k-atana sits:** EasyXT/QMT (heavily-wrapped side) for execution; research layer is PIT-correct + broker-neutral; potential future migration to details-exposed when HFT signals justify the complexity (per XAR-413 / XAR-418 strategic eval).
+
+**Cross-style wheels** worth tracking:
+- **WonderTrader/wondertrader** (C++ core, 6,080★, MIT, 2025-09-30 last push — semi-active/cooling) + **wtpy** (Python wrapper, 1,472★, 6 PyPI/day) — straddles both styles. Tracked in XAR-429.
 
 ### Ecosystem signal: OKX Agent Trade Kit (added 2026-05-18 evening)
 
