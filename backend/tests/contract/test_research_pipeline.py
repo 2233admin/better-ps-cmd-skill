@@ -1772,3 +1772,36 @@ def _load_script(path: Path):
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def test_ashare_control_rejects_when_quarantined_intents_present():
+    from app.research.pipeline.control import (
+        AShareControlConfig,
+        ASharePITValidationSummary,
+        evaluate_ashare_control,
+    )
+
+    report = evaluate_ashare_control(
+        config=AShareControlConfig(position_cap=0.05),
+        pit_summary=ASharePITValidationSummary(
+            input_rows=45,
+            visible_rows=45,
+            rejected_future_rows=0,
+            duplicate_rows=0,
+        ),
+        factor_values=10,
+        signals=1,
+        ledger_results={},
+        manifest_hash="a" * 64,
+        dataset_version="2026-05-17",
+        package_decision="trade",
+        quarantined_intent_count=2,
+        quarantined_intent_ids=("req-7", "req-9"),
+    )
+
+    assert report.decision == "reject"
+    assert "quarantined trading intents present" in report.error_terms["reject_reasons"]
+    assert report.invariants["no_quarantined_intents"] is False
+    assert report.observed_state["quarantined_intent_count"] == 2
+    assert report.observed_state["quarantined_intent_ids"] == ("req-7", "req-9")
+

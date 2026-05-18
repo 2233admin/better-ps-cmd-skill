@@ -122,6 +122,54 @@ def load_latest(path: Path) -> dict[str, IntentState]:
     return latest
 
 
+def apply_reconcile_cycle(
+    path: Path,
+    *,
+    intent_ids: list[str],
+    accepted_ids: set[str],
+    rejected_ids: set[str],
+    filled_ids: set[str],
+    reconciled_ids: set[str],
+    now: str,
+    reason_by_id: dict[str, str] | None = None,
+) -> dict[str, IntentState]:
+    """Replay log, transition each intent_id, append updated snapshot.
+
+    Returns the updated latest-state map. Intents missing from intent_ids that
+    already exist in the log are left untouched.
+    """
+
+    reason_by_id = reason_by_id or {}
+    latest = load_latest(path)
+    for iid in intent_ids:
+        current = latest.get(iid, IntentState(intent_id=iid))
+        prior_status = current.status
+        prior_history_len = len(current.history)
+        updated = step(
+            current,
+            in_accepted=iid in accepted_ids,
+            in_rejected=iid in rejected_ids,
+            in_fills=iid in filled_ids,
+            reconciled=iid in reconciled_ids,
+            now=now,
+            reason=reason_by_id.get(iid, ""),
+        )
+        changed = updated.status != prior_status or len(updated.history) != prior_history_len
+        if not changed:
+            latest.setdefault(iid, updated)
+            continue
+        append(path, updated)
+        latest[iid] = updated
+    return latest
+
+
+def quarantined_ids(path: Path) -> tuple[str, ...]:
+    """Return intent_ids currently in quarantined status."""
+
+    latest = load_latest(path)
+    return tuple(sorted(sid for sid, state in latest.items() if state.status == "quarantined"))
+
+
 def _record(state: IntentState, target: Status, now: str, reason: str) -> IntentState:
     entry = {"at": now, "from": state.status, "to": target, "reason": reason}
     state.history.append(entry)

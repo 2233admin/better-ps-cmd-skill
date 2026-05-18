@@ -109,6 +109,8 @@ def evaluate_ashare_control(
     liquidity_stress: float = 0.0,
     eligible_universe_count: int = 0,
     state_position_limit: float | None = None,
+    quarantined_intent_count: int = 0,
+    quarantined_intent_ids: tuple[str, ...] = (),
 ) -> AShareControlReport:
     halt_reasons: list[str] = []
     warnings: list[str] = []
@@ -173,6 +175,8 @@ def evaluate_ashare_control(
         reject_reasons.append("gross exposure exceeds control limit")
     if state_position_limit is not None and gross_exposure > state_position_limit:
         reject_reasons.append("gross exposure exceeds state regime limit")
+    if quarantined_intent_count > 0:
+        reject_reasons.append("quarantined trading intents present")
 
     max_drawdown = max((result.max_drawdown for result in ledger_results.values()), default=0.0)
     completed_returns = [
@@ -240,6 +244,8 @@ def evaluate_ashare_control(
         "liquidity_stress": liquidity_stress,
         "eligible_universe_count": eligible_universe_count,
         "state_position_limit": state_position_limit,
+        "quarantined_intent_count": quarantined_intent_count,
+        "quarantined_intent_ids": quarantined_intent_ids,
     }
     error_terms = {
         "max_drawdown": max_drawdown,
@@ -269,6 +275,7 @@ def evaluate_ashare_control(
         "gross_exposure_within_limit": gross_exposure <= config.max_gross_exposure,
         "industry_concentration_within_limit": industry_concentration <= config.max_industry_concentration,
         "liquidity_stress_within_limit": liquidity_stress <= config.max_liquidity_stress,
+        "no_quarantined_intents": quarantined_intent_count == 0,
     }
     objective = {
         "decision": "promote only when PIT, factor, signal, backtest, and morning package evidence pass controls",

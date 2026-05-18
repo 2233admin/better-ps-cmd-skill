@@ -10,7 +10,9 @@ from app.trading.recon_state import (
     QUARANTINE_AFTER_ATTEMPTS,
     IntentState,
     append,
+    apply_reconcile_cycle,
     load_latest,
+    quarantined_ids,
     step,
 )
 
@@ -82,6 +84,64 @@ def test_jsonl_append_and_load_replays_latest(tmp_path: Path):
 
 def test_load_latest_missing_file_returns_empty(tmp_path: Path):
     assert load_latest(tmp_path / "nope.jsonl") == {}
+
+
+def test_apply_reconcile_cycle_advances_multiple_intents(tmp_path: Path):
+    log = tmp_path / "recon.jsonl"
+    latest = apply_reconcile_cycle(
+        log,
+        intent_ids=["A", "B", "C"],
+        accepted_ids={"A", "B", "C"},
+        rejected_ids=set(),
+        filled_ids={"B"},
+        reconciled_ids=set(),
+        now="t1",
+    )
+    assert latest["A"].status == "submitted"
+    assert latest["B"].status == "filled"
+    assert latest["C"].status == "submitted"
+
+    latest = apply_reconcile_cycle(
+        log,
+        intent_ids=["A", "B", "C"],
+        accepted_ids={"A", "B", "C"},
+        rejected_ids=set(),
+        filled_ids={"B"},
+        reconciled_ids={"B"},
+        now="t2",
+    )
+    assert latest["B"].status == "reconciled"
+    assert latest["A"].status == "submitted"  # unchanged
+
+
+def test_apply_reconcile_cycle_quarantines_after_repeated_rejects(tmp_path: Path):
+    log = tmp_path / "recon.jsonl"
+    for i in range(QUARANTINE_AFTER_ATTEMPTS):
+        apply_reconcile_cycle(
+            log,
+            intent_ids=["A"],
+            accepted_ids=set(),
+            rejected_ids={"A"},
+            filled_ids=set(),
+            reconciled_ids=set(),
+            now=f"t{i}",
+            reason_by_id={"A": "risk_reject"},
+        )
+    assert quarantined_ids(log) == ("A",)
+
+
+def test_quarantined_ids_empty_when_none(tmp_path: Path):
+    log = tmp_path / "recon.jsonl"
+    apply_reconcile_cycle(
+        log,
+        intent_ids=["A"],
+        accepted_ids={"A"},
+        rejected_ids=set(),
+        filled_ids=set(),
+        reconciled_ids=set(),
+        now="t",
+    )
+    assert quarantined_ids(log) == ()
 
 
 if __name__ == "__main__":
