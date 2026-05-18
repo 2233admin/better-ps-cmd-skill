@@ -255,7 +255,7 @@ class MaterialistEngine:
         """获取 Kronos K线预测作为第5因子"""
         try:
             if self._kronos is None:
-                from ..ai.kronos_predictor import get_kronos
+                from ..ai_lab.kronos_predictor import get_kronos
                 self._kronos = get_kronos()
 
             if self._kronos.predictor is None:

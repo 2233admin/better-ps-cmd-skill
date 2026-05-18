@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from ..ai.predict import get_predictor
+from .predict import get_predictor
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -33,7 +33,7 @@ async def model_status():
 @router.get("/kronos/status")
 async def kronos_status():
     """Kronos 模型状态"""
-    from ..ai.kronos_predictor import get_kronos
+    from .kronos_predictor import get_kronos
     return get_kronos().status()
 
 
@@ -41,7 +41,7 @@ async def kronos_status():
 async def kronos_predict(pair: str):
     """Kronos K线预测"""
     import asyncio
-    from ..ai.kronos_predictor import get_kronos
+    from .kronos_predictor import get_kronos
 
     def _predict():
         k = get_kronos()

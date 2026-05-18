@@ -12,7 +12,7 @@ from .api.ashare.bond import router as bond_router
 from .api.portfolio import router as portfolio_router
 from .api.strategy_api import router as strategy_router
 from .api.order import router as order_router
-from .api.ai_api import router as ai_router
+from .ai_lab.api import router as ai_router
 from .api.macro_api import router as macro_router
 from .api.crypto.okx_api import router as okx_router
 from .api.trading.paper import router as paper_trading_router
