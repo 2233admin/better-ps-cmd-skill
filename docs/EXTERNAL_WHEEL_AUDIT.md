@@ -108,6 +108,10 @@ Presence of *any one* is enough. Absence of *all* means use the wheel.
 
 - **XAR-417** — single-component wheel evaluation (qlib / quantstats / alphalens / functime), priority High
 - **XAR-418** — strategic vnpy / rqalpha as backtest + trading-adapter layer foundation, priority High
+- **XAR-419** — TA-Lib swap for hand-rolled `data/indicators.py`, priority Medium
+- **XAR-420** — PyPortfolioOpt to fill portfolio-optimization gap, priority Medium
+- **XAR-421** — Strategic OpenBB overlap evaluation (terminal scope question), priority High
+- **XAR-422** — Track HKUDS/Vibe-Trading before building `app/ai_lab/trading/`, priority Low
 
 Both have cheap-probe acceptance criteria; do not ship implementation until spikes complete.
 
