@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -17,6 +18,12 @@ from loguru import logger
 
 class QMTBridge:
     """Boundary adapter that posts broker-neutral intents to EasyXT."""
+
+    # In-process daily order counter shared across instances. Keyed by UTC
+    # date string. NOTE: this is intentionally NOT persisted -- if the
+    # process restarts the counter resets. Cross-process enforcement would
+    # require redis/sqlite (see XAR-413 follow-up).
+    _daily_order_counts: dict[str, int] = {}
 
     def __init__(self):
         self.connected = False
@@ -42,10 +49,70 @@ class QMTBridge:
     def sell(self, code: str, price: float, volume: int) -> dict:
         return self._submit_intent(code, "sell", price, volume)
 
+    @classmethod
+    def _utc_today_key(cls) -> str:
+        return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+
+    @classmethod
+    def _live_test_rejection(
+        cls, code: str, price: float, volume: float
+    ) -> str | None:
+        """Mirror of OKX `_live_test_rejection` for the A-share/EasyXT path.
+
+        Returns a string reason if the intent must be rejected, else None.
+        Contract intentionally identical to okx.bridge.OKXBridge for parity.
+        """
+        if os.environ.get("KATANA_ENABLE_ASHARE_LIVE_TEST") != "1":
+            return "live_test_disabled"
+
+        allowed = {
+            item.strip().upper()
+            for item in os.environ.get(
+                "KATANA_ASHARE_LIVE_TEST_SYMBOLS", ""
+            ).split(",")
+            if item.strip()
+        }
+        if not allowed or code.upper() not in allowed:
+            return "symbol_not_in_allowlist"
+
+        try:
+            max_notional = float(
+                os.environ.get("KATANA_ASHARE_LIVE_TEST_MAX_NOTIONAL", "50000")
+            )
+        except ValueError:
+            return "notional_exceeds_cap"
+        notional = float(price) * float(volume)
+        if notional > max_notional:
+            return "notional_exceeds_cap"
+
+        try:
+            max_orders = int(
+                os.environ.get(
+                    "KATANA_ASHARE_LIVE_TEST_MAX_ORDERS_PER_DAY", "20"
+                )
+            )
+        except ValueError:
+            return "daily_order_cap_reached"
+        today = cls._utc_today_key()
+        if cls._daily_order_counts.get(today, 0) >= max_orders:
+            return "daily_order_cap_reached"
+
+        return None
+
+    @classmethod
+    def _record_live_test_order(cls) -> None:
+        today = cls._utc_today_key()
+        cls._daily_order_counts[today] = cls._daily_order_counts.get(today, 0) + 1
+
     def _submit_intent(self, code: str, side: str, price: float, volume: int) -> dict:
+        rejection = self._live_test_rejection(code, price, volume)
+        if rejection:
+            return {"error": rejection, "rejected": True, "reason": rejection}
+
         if not self.connected:
             return {"error": "EasyXT bridge not connected"}
 
+        self._record_live_test_order()
         payload = {
             "request_id": f"katana-{uuid.uuid4().hex}",
             "strategy": "katana_boundary",
