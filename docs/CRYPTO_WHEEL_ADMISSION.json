@@ -67,12 +67,23 @@
     {
       "name": "ccxt",
       "role": "exchange_rest_sdk",
-      "decision": "candidate",
-      "scope": "Optional future multi-exchange market data adapter.",
+      "decision": "allow",
+      "scope": "Drop-in OKX market data + order adapter. XAR-423 spike proved schema compatibility; XAR-426 promoted to production default via KATANA_OKX_ADAPTER=ccxt.",
       "constraints": [
-        "Read-only until OKX L3 sim reconciliation is stable",
         "No private order methods exposed to research",
-        "All outputs must pass crypto PIT contracts"
+        "All outputs must pass crypto PIT contracts",
+        "Order submission only via OKXBridge live_test gate (katana_gate_token enforced)"
+      ]
+    },
+    {
+      "name": "python-okx",
+      "role": "exchange_rest_sdk",
+      "decision": "allow",
+      "scope": "OKX-native PIT depth endpoints (funding rate history, open interest, mark price). XAR-423 spike proved all required fields present. Used only from okx_ccxt_adapter.py and okx_pit_writer.py.",
+      "constraints": [
+        "Public data endpoints only (no auth methods exposed to research)",
+        "All outputs must pass crypto PIT contracts via validate_pit_invariants()",
+        "No order submission path"
       ]
     },
     {
