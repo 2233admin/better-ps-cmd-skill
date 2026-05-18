@@ -2,6 +2,10 @@
 
 `k-atana` 是研究、数据、因子、回测、paper trading 和受控交易测试终端，不是默认自动实盘系统。
 
+> **新接手的同学 / Claude / LLM agent 请先读** [CLAUDE.md](CLAUDE.md) —— repo 入口简报，包含架构边界、PIT 契约、操作 quick reference 和反模式清单。
+>
+> **写新代码前先读** [docs/EXTERNAL_WHEEL_AUDIT.md](docs/EXTERNAL_WHEEL_AUDIT.md) —— 外部轮子清单（qlib / empyrical / rqalpha / vnpy / alphalens / …）。30 分钟评估能省一天造轮子时间。
+
 主链路：
 
 ```text
