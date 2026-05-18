@@ -1,4 +1,8 @@
-"""Benchmark the A-share research pipeline and emit gate metrics."""
+"""Throughput benchmark for the A-share research pipeline (rows/sec, symbols/sec, decision).
+
+Note: this measures pipeline performance, not portfolio attribution. See
+attribution.py for per-symbol PnL contribution + index comparisons.
+"""
 
 from __future__ import annotations
 
