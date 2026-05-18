@@ -23,6 +23,8 @@ dependencies = [
     "scipy>=1.11.0",
     "reportlab>=4.0.0",
     "torch==2.12.0+cu132",
+    "ccxt>=4.5.54",
+    "python-okx>=0.4.1",
 ]
 
 [dependency-groups]
