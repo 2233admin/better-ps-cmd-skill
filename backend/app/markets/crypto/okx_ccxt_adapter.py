@@ -45,9 +45,10 @@ def _build_ccxt_exchange(
         config["apiKey"] = api_key
         config["secret"] = secret_key
         config["password"] = passphrase
+    ex = ccxt.okx(config)
     if simulated:
-        config["headers"] = {"x-simulated-trading": "1"}
-    return ccxt.okx(config)
+        ex.set_sandbox_mode(True)
+    return ex
 
 
 # ---------------------------------------------------------------------------
