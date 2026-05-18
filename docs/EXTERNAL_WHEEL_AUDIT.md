@@ -37,6 +37,12 @@ k-atana subsystems, so future contributors do not rebuild what already exists.
 | Portfolio optimization | (not built) | **robertmartin8/PyPortfolioOpt** (efficient frontier, Black-Litterman, HRP) | 5,724 | 2026-04-20 | 5,775 | **NEW gap surfaced** — we have no portfolio optimization layer; this is the standard. Riskfolio-Lib (4.2k★ / 3.2k/day) is the risk-focused alternative |
 | Quant terminal (overlaps k-atana scope) | k-atana itself | **OpenBB-finance/OpenBB** | 67,724 | 2026-05-18 | 2,474 | **strategic question** — OpenBB explicitly targets "AI agents" and is the largest finance-OSS project. Worth a hard look at whether k-atana's frontend should integrate vs reinvent |
 | Agent-based trading framework (2026 trend) | — | **HKUDS/Vibe-Trading** | 7,531 | 2026-05-17 | (no PyPI release) | **2026 trend signal** — Hong Kong U Data Science Lab. Worth tracking before building anything in `app/ai_lab/trading/` |
+| Multi-agent LLM trading firm (top 2026 pick) | — | **TauricResearch/TradingAgents** | 76,614 | 2026-05-17 | 302 | **HIGH PRIORITY** — biggest 2026 agent-trading project (3x Vibe-Trading stars), Apache-2.0, simulates a full trading firm (fundamental/sentiment/technical/researcher/trader/risk/PM agents). PyPI install rate low because most users clone + run via UI. |
+| Agent-trading sibling | — | **HKUDS/AI-Trader** | 17,934 | 2026-05-13 | n/a | Same lab as Vibe-Trading; full agent execution layer. Track alongside XAR-422. |
+| Crypto unified exchange API | `backend/app/data/okx_client.py` | **ccxt/ccxt** | 42,488 | 2026-05-17 | **116,618** | **HIGHEST install rate in entire audit.** MIT. 100+ exchanges. Our hand-rolled OKX client should almost certainly become `ccxt.okx()`. |
+| Crypto official OKX SDK | `backend/app/data/okx_client.py` | **okxapi/python-okx** | (small repo) | active | **3,074** | Official OKX v5 endpoints (funding-rate-history, open-interest, mark-price) — exactly what we need for the crypto funding/OI PIT gap. Use alongside ccxt: ccxt for portability, python-okx for OKX-specific PIT depth. |
+| Crypto backtest (permissive) | — | **jesse-ai/jesse** | 7,902 | 2026-05-16 | 446 | MIT — picked over freqtrade (50k★ but GPL-3.0, distribution-incompatible with k-atana). |
+| Crypto historical funding/OI bulk dump | (gap) | **okx-dump** (PyPI) | n/a | active | 21 | Niche but exactly fills crypto funding/open-interest/mark-price PIT gap. Worth a spike. |
 
 ## DO NOT recommend (graveyard)
 
@@ -49,6 +55,7 @@ k-atana subsystems, so future contributors do not rebuild what already exists.
 | **quantopian/zipline** | Original archived; use `stefan-jansen/zipline-reloaded` (US-equity focused, no live trading — wrong fit for A-share). |
 | **hudson-and-thames/mlfinlab** | 4,743★ but **0 installs/day** (literally zero in last day, 7 last month) + last push 2023-10. Implementations from López de Prado's *Advances in Financial ML*. Pure star bait — the book sells, the library is abandoned. Re-implement the chapters you need from the book, don't depend on this. |
 | **mementum/backtrader** | 21,580★ + 8,714 installs/day but **last push 2024-08-19 (21 months dead)**. Same pattern as tushare: huge install count from inertia (every retail tutorial uses it), but zero maintenance. New projects: vectorbt (14k/day, active) or rqalpha (CN-native). Existing users: fork or migrate. |
+| **freqtrade/freqtrade** | 50,460★ + 2,439 installs/day + actively maintained but **GPL-3.0** — copyleft license incompatible with distributing k-atana (would force open-sourcing trading code). Use **jesse-ai/jesse** (MIT, 446/day) or **hummingbot** (Apache-2.0, 65/day) instead. Library is technically not dead, but functionally graveyarded for our license profile. |
 
 ## Rule
 
@@ -112,6 +119,9 @@ Presence of *any one* is enough. Absence of *all* means use the wheel.
 - **XAR-420** — PyPortfolioOpt to fill portfolio-optimization gap, priority Medium
 - **XAR-421** — Strategic OpenBB overlap evaluation (terminal scope question), priority High
 - **XAR-422** — Track HKUDS/Vibe-Trading before building `app/ai_lab/trading/`, priority Low
+- **XAR-423** — ccxt + python-okx replace `data/okx_client.py` (also closes crypto funding/OI PIT gap), priority Urgent
+- **XAR-424** — Evaluate TauricResearch/TradingAgents (76k★) before designing `ai_lab/trading/`, priority High
+- **XAR-425** — XAR-421 follow-up: OpenBB AGPLv3 license posture decision, priority High
 
 Both have cheap-probe acceptance criteria; do not ship implementation until spikes complete.
 
@@ -147,3 +157,18 @@ Also caught two more graveyard inhabitants via install rate:
 - **backtrader** — 21k★ + 8.7k installs/day but **21 months dead**. Inertia + tutorial recommendations keep installs high.
 
 **Process update:** start with broad GitHub topic search (`gh search repos --topic <domain> --sort stars --limit 25`), not "wheels for the modules I already wrote." The latter misses the strategic-overlap candidates (OpenBB) and the gaps you didn't know existed (PyPortfolioOpt).
+
+**Fifth-pass lesson (added 2026-05-18, after Grok second opinion):** the 4th pass was still A-share / generic quant heavy and missed two whole categories:
+
+1. **Crypto side** — only had OKX REST client hand-rolled. Broad `gh search repos --topic cryptocurrency-exchanges --sort stars` + Grok consultation surfaced:
+   - **ccxt** 42k★ + **116,618 installs/day** (highest of any wheel in any pass), MIT, 100+ exchanges. Our `data/okx_client.py` should be `ccxt.okx()`.
+   - **python-okx** 3,074/day, official OKX v5 SDK with `/funding-rate-history`, `/open-interest`, `/mark-price` endpoints — fills the crypto funding/OI PIT gap from the original Wave-5 plan.
+   - **jesse-ai/jesse** MIT (vs freqtrade GPL-3.0 which would force open-sourcing trading code).
+   - **okx-dump** bulk historical downloader for OKX (low installs but exactly the PIT need).
+
+2. **Agent-trading frontier** — missed the biggest one:
+   - **TauricResearch/TradingAgents** — 76,614★ + 302/day + Apache-2.0 + pushed yesterday. 3x Vibe-Trading's stars. Simulates a full trading firm with specialist agents. This is the 2026 cohort flagship and I had zero awareness.
+
+**Process lesson #2:** I evaluated ecosystem with internal-knowledge searches even after switching to live API data. Asking Grok (xAI, different training data + browse access) for "what am I missing on the 2026 frontier" surfaced TradingAgents (76k★ — should have been impossible to miss) and confirmed AGPL risk on OpenBB. Independent-model second opinion is cheap and catches systematic blind spots.
+
+**Process lesson #3 — license is a signal that beats install rate:** freqtrade (GPL-3.0, 50k★, 2.4k/day) is technically active and popular, but practically graveyarded for any project that might be distributed. Same for OpenBB (AGPLv3 — *network* copyleft, even harder than GPL). Pin license in the triangulation, not just stars/push/installs.
