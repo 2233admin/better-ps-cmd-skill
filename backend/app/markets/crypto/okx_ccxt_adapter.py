@@ -108,6 +108,23 @@ class OKXCCXTAdapter:
     def has_credentials(self) -> bool:
         return bool(self.api_key and self.secret_key and self.passphrase)
 
+    def check_auth(self) -> dict:
+        """Verify credentials by fetching balance. Returns OKX-shaped response dict.
+
+        Replaces the legacy OKXClient._get("/api/v5/account/balance", auth=True)
+        call that bridge.py used for connection health checks.
+        Returns {"code": "0", "data": [...]} on success, or error dict on failure.
+        """
+        if not self.has_credentials():
+            return self._missing_credentials_response()
+        try:
+            bal = self._ex.fetch_balance()
+            details = bal.get("info", {}).get("data", [])
+            return {"code": "0", "data": details if details else []}
+        except Exception as e:
+            logger.error(f"OKXCCXTAdapter.check_auth: {e}")
+            return {"code": "-1", "msg": str(e), "data": []}
+
     def _missing_credentials_response(self) -> dict:
         return {
             "code": "-1",

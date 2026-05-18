@@ -21,7 +21,12 @@ class OKXBridge:
 
     def connect(self) -> bool:
         try:
-            r = self.client._get("/api/v5/account/balance", auth=True)
+            # Use check_auth() for both legacy OKXClient and new OKXCCXTAdapter.
+            # Legacy OKXClient has _get; new adapter exposes check_auth() instead.
+            if hasattr(self.client, "check_auth"):
+                r = self.client.check_auth()
+            else:
+                r = self.client._get("/api/v5/account/balance", auth=True)
             if r.get("code") == "0":
                 self.connected = True
                 logger.info(f"OKX bridge connected (mode={self.trade_mode})")
