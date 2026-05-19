@@ -53,8 +53,8 @@ import warnings
 from itertools import combinations
 
 import numpy as np
-import pandas as pd
-from scipy.stats import norm
+import polars as pl
+from scipy.stats import norm, rankdata
 from scipy.stats import false_discovery_control
 
 # Euler-Mascheroni constant (Bailey 2014 eq. 2)
@@ -157,7 +157,7 @@ def deflated_sharpe_ratio(
 
 
 def cscv_pbo(
-    returns_matrix: pd.DataFrame,
+    returns_matrix: pl.DataFrame,
     n_splits: int = 16,
 ) -> dict:
     """Combinatorially Symmetric Cross-Validation PBO per Bailey et al. (2017).
@@ -168,7 +168,7 @@ def cscv_pbo(
 
     Parameters
     ----------
-    returns_matrix : pd.DataFrame
+    returns_matrix : pl.DataFrame
         T x N matrix: T time-steps (rows), N strategies (columns).
         Values should be period returns or IC values (consistent sign = better).
         Strategies with all-NaN columns are dropped before computation.
@@ -201,10 +201,10 @@ def cscv_pbo(
     note_parts: list[str] = []
 
     # Drop all-NaN strategy columns
-    valid_cols = returns_matrix.dropna(axis=1, how="all").columns
-    mat = returns_matrix[valid_cols].copy()
-    N = mat.shape[1]
-    T = mat.shape[0]
+    valid_cols = [c for c in returns_matrix.columns if returns_matrix[c].null_count() < returns_matrix.height]
+    mat = returns_matrix.select(valid_cols)
+    N = mat.width
+    T = mat.height
 
     if N < 2:
         return {
@@ -244,7 +244,7 @@ def cscv_pbo(
     for i in range(n_splits):
         start = i * split_size
         end = start + split_size if i < n_splits - 1 else T
-        submatrices.append(mat.iloc[start:end])
+        submatrices.append(mat.slice(start, end - start))
 
     half = n_splits // 2
     indices = list(range(n_splits))
@@ -256,19 +256,20 @@ def cscv_pbo(
     for is_indices in combinations(indices, half):
         oos_indices = [i for i in indices if i not in is_indices]
 
-        is_mat = pd.concat([submatrices[i] for i in is_indices])
-        oos_mat = pd.concat([submatrices[i] for i in oos_indices])
+        is_mat = pl.concat([submatrices[i] for i in is_indices])
+        oos_mat = pl.concat([submatrices[i] for i in oos_indices])
 
         # Score each strategy: mean return (or IC) on IS and OOS
-        is_scores = is_mat.mean()
-        oos_scores = oos_mat.mean()
+        # mean() returns a 1-row DataFrame; row(0) gives a tuple of values
+        is_scores = np.asarray(is_mat.mean().row(0), dtype=float)
+        oos_scores = np.asarray(oos_mat.mean().row(0), dtype=float)
 
         # IS-optimal strategy index
-        is_best_idx = int(is_scores.argmax())
+        is_best_idx = int(np.argmax(is_scores))
 
         # OOS rank of the IS-best strategy (rank 1 = worst, N = best)
-        oos_rank_series = oos_scores.rank()
-        oos_rank = float(oos_rank_series.iloc[is_best_idx])
+        oos_ranks = rankdata(oos_scores, method="average")
+        oos_rank = float(oos_ranks[is_best_idx])
 
         # IS rank of IS-best (always N by construction)
         is_rank = float(N)

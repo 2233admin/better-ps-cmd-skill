@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 from scipy.stats import false_discovery_control, norm
 
@@ -175,7 +175,7 @@ class TestCSCVPBO:
         n_obs: int,
         good_strategy_idx: int | None = None,
         rng_seed: int = 42,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """Build a T x N returns matrix fixture.
 
         If good_strategy_idx is set, that column gets a positive drift.
@@ -186,7 +186,7 @@ class TestCSCVPBO:
         if good_strategy_idx is not None:
             data[:, good_strategy_idx] += 0.005  # positive drift
         cols = [f"strat_{i}" for i in range(n_strategies)]
-        return pd.DataFrame(data, columns=cols)
+        return pl.from_numpy(data, schema=cols)
 
     def test_pbo_output_schema(self):
         """cscv_pbo must return dict with required keys."""
@@ -254,7 +254,7 @@ class TestCSCVPBO:
 
     def test_pbo_too_few_strategies_graceful(self):
         """Single-column returns matrix should return nan gracefully."""
-        mat = pd.DataFrame({"strat_0": np.random.randn(64)})
+        mat = pl.DataFrame({"strat_0": np.random.randn(64)})
         result = cscv_pbo(mat, n_splits=8)
         assert math.isnan(result["pbo_score"]), "Should return nan for N<2"
         assert result["n_combinations"] == 0

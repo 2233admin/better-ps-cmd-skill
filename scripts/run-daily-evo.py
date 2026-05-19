@@ -67,7 +67,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 K_ATANA_ROOT = Path(r"D:\projects\k-atana")
 BACKEND = K_ATANA_ROOT / "backend"
@@ -445,7 +445,7 @@ def load_shinka_factors(json_path: Path) -> list[dict]:
     return out
 
 
-def build_pbo_matrix(candidates: list[dict]) -> pd.DataFrame:
+def build_pbo_matrix(candidates: list[dict]) -> pl.DataFrame:
     """Build T x N matrix of per-fold IC values for CSCV PBO.
 
     Each column is a candidate; rows are fold IC_t values.
@@ -461,10 +461,10 @@ def build_pbo_matrix(candidates: list[dict]) -> pd.DataFrame:
             n_folds = max(n_folds, len(ic_vals))
             cols[name] = ic_vals
     if not cols or n_folds == 0:
-        return pd.DataFrame()
+        return pl.DataFrame()
     # Pad columns shorter than n_folds with NaN
     padded = {k: v + [float("nan")] * (n_folds - len(v)) for k, v in cols.items()}
-    return pd.DataFrame(padded)
+    return pl.DataFrame(padded)
 
 
 def _load_candidates_for_engine(engine_key: str, artifacts_dir: Path) -> list[dict]:
@@ -519,7 +519,7 @@ def _combined_dsr_pbo(
     )
 
     pbo_mat = build_pbo_matrix(all_cands)
-    if not pbo_mat.empty and pbo_mat.shape[0] >= 4:
+    if not pbo_mat.is_empty() and pbo_mat.height >= 4:
         pbo = cscv_pbo(pbo_mat, n_splits=PBO_N_SPLITS)
     else:
         pbo = {"pbo_score": float("nan"), "n_combinations": 0, "note": "insufficient folds for PBO"}
@@ -581,7 +581,7 @@ def _per_pool_diagnostics(
                 folds_key="wf_per_fold",
             )
             pbo_mat = build_pbo_matrix(cands)
-            if not pbo_mat.empty and pbo_mat.shape[0] >= 4:
+            if not pbo_mat.is_empty() and pbo_mat.height >= 4:
                 pbo = cscv_pbo(pbo_mat, n_splits=PBO_N_SPLITS)
             else:
                 pbo = {"pbo_score": float("nan"), "n_combinations": 0, "note": ""}
