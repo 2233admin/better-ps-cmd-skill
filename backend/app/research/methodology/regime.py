@@ -58,14 +58,29 @@ GPU path exists for cross-section batched regime detection (many series in
 parallel), where a (B, K) tensor step is fully parallel and the 5090 actually
 earns its keep. See `expanding_fit_hmm_batched` (TODO XAR-466).
 
-Known limitation (2026-05-20 smoke on CSI300 2007-2026)
--------------------------------------------------------
-Univariate Gaussian HMM on log returns learns a **volatility regime**, not a
-**trend regime**. Strong on crash/panic (2015-Q3: 35% bear, 2020 covid: 53%
-bear). Misses slow-grind bears (2018, 2021-22 daily mean ~-0.17%) which look
-like neutral. Multivariate HMM (return + 20d vol + 60d momentum) tracked as
-XAR-465. Use this as a crash-detection meta-feature, not a standalone trend
-label.
+Multivariate vs univariate (2026-05-20 smoke on CSI300 2005-2026)
+----------------------------------------------------------------
+expanding_fit_hmm now accepts a multi-column feature panel (ret, vol_20d,
+mom_60d, ...). Empirical episode capture comparing univariate vs MV1:
+
+  Episode             Uni-bear%  MV1-bear%
+  2015 Q3 crash       50.7%      40.0%
+  2018 slow grind     21.4%      10.3%
+  2020 covid          25.0%      45.0%
+  2021-22 slow grind  15.5%      28.6%
+
+MV1 trades crash precision for slow-bear sensitivity (2021-22 +13pp, covid
++20pp). 2018 stays intractable for either model: it was a year-long quiet
+drift indistinguishable from low-vol neutral even at the 250d horizon.
+
+Feature standardization (z-score with expanding window) was tested and
+rejected: shrinks state separation, broke 2015 Q3 (16% bear) and 2021-22
+(14% bear). Raw features outperform standardized ones for this model.
+
+Choose the variant based on use case:
+  - crash-detection meta-feature (sharp drops) -> univariate
+  - slow-grind detection (2021-22 style)       -> MV1 (ret + vol_20d + mom_60d)
+  - production ship-gate consumes both as separate signals.
 """
 
 from __future__ import annotations
@@ -74,6 +89,7 @@ import numpy as np
 import polars as pl
 from hmmlearn.hmm import GaussianHMM
 from numba import njit
+from scipy.stats import multivariate_normal
 
 
 @njit(cache=True, fastmath=True)
@@ -91,23 +107,20 @@ def _logsumexp_axis0(x: np.ndarray) -> np.ndarray:
     return out
 
 
-@njit(cache=True, fastmath=True)
-def _gaussian_log_emission(
-    r: np.ndarray, means: np.ndarray, vars_: np.ndarray
+def _gaussian_log_emission_mv(
+    X: np.ndarray, means: np.ndarray, covars: np.ndarray
 ) -> np.ndarray:
-    """Diag-cov 1D Gaussian log emission for K states. r shape (T,), returns (T, K)."""
-    T = r.shape[0]
+    """Multivariate Gaussian log emission, K states. X (T, D), means (K, D),
+    covars (K, D, D) -- always expanded shape, works for diag (returned as
+    diagonal matrix by hmmlearn .covars_ getter) and full alike. Returns (T, K).
+    """
+    T = X.shape[0]
     K = means.shape[0]
     out = np.empty((T, K))
-    log_2pi = np.log(2.0 * np.pi)
     for k in range(K):
-        m = means[k]
-        v = vars_[k]
-        c = -0.5 * (log_2pi + np.log(v))
-        inv = 0.5 / v
-        for t in range(T):
-            d = r[t] - m
-            out[t, k] = c - inv * d * d
+        out[:, k] = multivariate_normal.logpdf(
+            X, mean=means[k], cov=covars[k], allow_singular=True
+        )
     return out
 
 
@@ -164,14 +177,16 @@ def _forward_step_jit(
     return out
 
 
-def _label_states_by_mean(model: GaussianHMM) -> np.ndarray:
-    """Return permutation that orders states from lowest mean to highest."""
-    return np.argsort(model.means_.flatten())
+def _label_states_by_mean(model: GaussianHMM, label_idx: int = 0) -> np.ndarray:
+    """Return permutation that orders states from lowest mean to highest along
+    feature column `label_idx` (default 0 = first feature, typically ret)."""
+    return np.argsort(model.means_[:, label_idx])
 
 
 def expanding_fit_hmm(
-    returns: pl.DataFrame,
+    features: pl.DataFrame,
     *,
+    label_col: str = "ret",
     n_states: int = 3,
     min_train: int = 252,
     refit_every: int = 21,
@@ -181,8 +196,12 @@ def expanding_fit_hmm(
 
     Parameters
     ----------
-    returns : pl.DataFrame with columns (date: Date, ret: Float64)
-        Daily index returns, sorted by date ascending.
+    features : pl.DataFrame with columns ['date', <feature_1>, <feature_2>, ...]
+        All non-date columns become the multivariate observation vector. For
+        univariate regime detection pass date+ret (D=1). For multivariate (the
+        recommended setup that catches slow bears) pass date+ret+vol_20d+mom_60d.
+    label_col : column used to order states; lowest mean = bear, highest = bull.
+        Default 'ret'. Must be one of the feature columns.
     n_states : 3 by default (bear / neutral / bull).
     min_train : warmup window; rows < min_train get NaN probs.
     refit_every : refit cadence in trading days; between refits the same
@@ -192,47 +211,52 @@ def expanding_fit_hmm(
     Returns
     -------
     pl.DataFrame with columns (date, p_bear, p_neutral, p_bull, state_argmax).
-    Rows before min_train are NaN. Row t depends only on returns[0..t].
+    Rows before min_train are NaN. Row t depends only on features[0..t].
     """
-    if returns.height < min_train + 1:
+    if features.height < min_train + 1:
         raise ValueError(
-            f"returns has {returns.height} rows, need >= {min_train + 1}"
+            f"features has {features.height} rows, need >= {min_train + 1}"
         )
-    if not ("date" in returns.columns and "ret" in returns.columns):
-        raise ValueError(f"returns must have date+ret columns, got {returns.columns}")
+    if "date" not in features.columns:
+        raise ValueError(f"features must include 'date' column, got {features.columns}")
+    feature_cols = [c for c in features.columns if c != "date"]
+    if not feature_cols:
+        raise ValueError("features must include >= 1 non-date column")
+    if label_col not in feature_cols:
+        raise ValueError(f"label_col '{label_col}' not in features {feature_cols}")
+    label_idx = feature_cols.index(label_col)
 
-    dates = returns["date"].to_numpy()
-    r = returns["ret"].to_numpy().astype(float)
-    T = len(r)
+    dates = features["date"].to_numpy()
+    X = features.select(feature_cols).to_numpy().astype(float)
+    T, D = X.shape
+    cov_type = "diag" if D == 1 else "full"
     probs = np.full((T, n_states), np.nan)
 
     t = min_train
     while t < T:
-        # Refit on prefix r[:t]. Cold-init each era — warm-starting from prev era
+        # Refit on prefix X[:t]. Cold-init each era — warm-starting from prev era
         # sticks at local optima as the data distribution shifts (verified on
         # CSI300 21yr: bear-state mass collapsed from ~35% to 0% in 2015 crash
         # with warm-start enabled). EM cold-converges in ~10-15 iters per fit.
-        train = r[:t].reshape(-1, 1)
+        train = X[:t]
         model = GaussianHMM(
             n_components=n_states,
-            covariance_type="diag",
+            covariance_type=cov_type,
             n_iter=15,
             random_state=seed,
             tol=1e-4,
         )
         model.fit(train)
-        perm = _label_states_by_mean(model)
+        perm = _label_states_by_mean(model, label_idx=label_idx)
         log_startprob = np.log(model.startprob_ + 1e-30)
         log_transmat = np.log(model.transmat_ + 1e-30)
 
         # Era: produce probs for rows [t, era_end). Compute emissions for the
-        # whole era up to era_end in one JIT call (avoids per-row python overhead).
+        # whole era up to era_end in one scipy call (D-dimensional Gaussian).
         era_end = min(t + refit_every, T)
-        means = model.means_.flatten()
-        # diag covariance is shape (K, 1); flatten gives K variances.
-        vars_ = model.covars_.reshape(-1, 1).flatten() if model.covars_.ndim == 2 \
-            else model.covars_.flatten()
-        log_frame_all = _gaussian_log_emission(r[:era_end], means, vars_)
+        log_frame_all = _gaussian_log_emission_mv(
+            X[:era_end], model.means_, model.covars_
+        )
 
         # Full forward pass on r[:t+1] (seed log_alpha for date t).
         log_alpha = _forward_prefix_jit(
