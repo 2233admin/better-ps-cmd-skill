@@ -20,6 +20,7 @@ venv/
 /outputs/
 /data/
 /DATA/
+/tmp/
 backend/.anton/
 backend/C:/
 backend/data/

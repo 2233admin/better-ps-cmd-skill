@@ -55,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
         summary = migrate_sidecars_to_delta(args)
     elif args.command == "status":
         summary = status(args)
+    elif args.command == "compare-status":
+        summary = compare_status(args)
     elif args.command == "watch-progress":
         return watch_progress_cli(args)
     else:  # pragma: no cover - argparse enforces this
@@ -167,6 +169,17 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_ashare_common_args(status_parser)
     status_parser.add_argument("--run-id", default=_today_run_id())
     status_parser.add_argument("--json", action="store_true")
+
+    compare_parser = subparsers.add_parser(
+        "compare-status",
+        help="Compare this machine's A-share status JSON against another machine (for example the 5090 box)",
+    )
+    _add_ashare_common_args(compare_parser)
+    compare_parser.add_argument("--run-id", default=_today_run_id())
+    compare_parser.add_argument("--other-status", required=True, help="Path to the other machine's exported status JSON")
+    compare_parser.add_argument("--left-label", default="local")
+    compare_parser.add_argument("--right-label", default="other")
+    compare_parser.add_argument("--json", action="store_true")
 
     watch_parser = subparsers.add_parser("watch-progress", help="Continuously refresh A-share sidecar sync progress")
     _add_ashare_common_args(watch_parser)
@@ -360,6 +373,72 @@ def status(args: argparse.Namespace) -> dict[str, Any]:
         "data_root": str(data_root),
         "run_id": args.run_id,
         "artifacts": _artifact_summary(data_root, args.run_id),
+        "failed": False,
+    }
+
+
+def compare_status(args: argparse.Namespace) -> dict[str, Any]:
+    local = status(args)
+    other_path = Path(args.other_status)
+    other = json.loads(other_path.read_text(encoding="utf-8"))
+    local_artifacts = local.get("artifacts") or {}
+    other_artifacts = other.get("artifacts") or {}
+    dataset_keys = sorted(set(local_artifacts) | set(other_artifacts))
+    comparisons: list[dict[str, Any]] = []
+    mismatch_count = 0
+
+    for key in dataset_keys:
+        left = local_artifacts.get(key) or {}
+        right = other_artifacts.get(key) or {}
+        fields = (
+            "exists",
+            "dataset",
+            "storage_format",
+            "row_count",
+            "symbol_count",
+            "start",
+            "end",
+            "content_hash",
+            "sync_mode",
+            "sync_strategy_version",
+            "planned_trade_date_count",
+            "progress_trade_date_count",
+            "progress_ann_date_end",
+            "delta_version",
+        )
+        diffs: list[dict[str, Any]] = []
+        for field_name in fields:
+            left_value = left.get(field_name)
+            right_value = right.get(field_name)
+            if left_value != right_value:
+                diffs.append(
+                    {
+                        "field": field_name,
+                        args.left_label: left_value,
+                        args.right_label: right_value,
+                    }
+                )
+        if diffs:
+            mismatch_count += 1
+        comparisons.append(
+            {
+                "artifact": key,
+                "match": not diffs,
+                "diffs": diffs,
+                args.left_label: left,
+                args.right_label: right,
+            }
+        )
+
+    return {
+        "command": "compare-status",
+        "data_root": str(Path(args.data_root)),
+        "run_id": args.run_id,
+        "other_status": str(other_path),
+        "labels": {"left": args.left_label, "right": args.right_label},
+        "artifact_count": len(dataset_keys),
+        "mismatch_count": mismatch_count,
+        "comparisons": comparisons,
         "failed": False,
     }
 
@@ -733,6 +812,23 @@ def _format_summary(summary: dict[str, Any]) -> str:
         lines.append(f"data_root: {summary['data_root']}")
     if "run_id" in summary:
         lines.append(f"run_id: {summary['run_id']}")
+    if summary.get("command") == "compare-status":
+        lines.append(f"other_status: {summary['other_status']}")
+        lines.append(
+            f"mismatches: {summary['mismatch_count']}/{summary['artifact_count']} "
+            f"({summary['labels']['left']} vs {summary['labels']['right']})"
+        )
+        for item in summary.get("comparisons", []):
+            if item.get("match"):
+                continue
+            lines.append(f"- {item['artifact']}: mismatch")
+            for diff in item.get("diffs", []):
+                lines.append(
+                    f"  - {diff['field']}: "
+                    f"{summary['labels']['left']}={diff.get(summary['labels']['left'])!r}, "
+                    f"{summary['labels']['right']}={diff.get(summary['labels']['right'])!r}"
+                )
+        return "\n".join(lines)
     for step in summary.get("steps", []):
         reason = f" ({step['reason']})" if step.get("reason") else ""
         lines.append(f"- {step['name']}: {step['status']}{reason}")

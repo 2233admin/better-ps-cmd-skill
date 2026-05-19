@@ -207,6 +207,90 @@ def test_watch_progress_snapshot_surfaces_dataset_progress(tmp_path):
     assert snapshot["datasets"]["share_float_event_pit"]["progress_ann_date_end"] == "2020-01-31"
 
 
+def test_compare_status_reports_mismatched_artifacts(tmp_path):
+    datactl = _load_datactl()
+    local_root = tmp_path / "local" / "Ashare"
+    manifest_root = local_root / "_manifest"
+    manifest_root.mkdir(parents=True)
+    (manifest_root / "coverage.json").write_text(
+        """
+        {
+          "items": [
+            {
+              "dataset": "ashare.market_cap_daily_pit",
+              "path": "pit/market_cap_daily_pit",
+              "storage_format": "delta",
+              "row_count": 100,
+              "symbol_count": 10,
+              "start": "2016-01-01 00:00:00+00:00",
+              "end": "2016-01-31 00:00:00+00:00",
+              "content_hash": "abc"
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    (manifest_root / "market_cap_daily_pit.json").write_text(
+        """
+        {
+          "dataset": "ashare.market_cap_daily_pit",
+          "path": "pit/market_cap_daily_pit",
+          "storage_format": "delta",
+          "row_count": 100,
+          "symbol_count": 10,
+          "start": "2016-01-01 00:00:00+00:00",
+          "end": "2016-01-31 00:00:00+00:00",
+          "content_hash": "abc",
+          "planned_trade_date_count": 20,
+          "progress_trade_date_count": 20
+        }
+        """,
+        encoding="utf-8",
+    )
+    other_status = tmp_path / "other_status.json"
+    other_status.write_text(
+        """
+        {
+          "artifacts": {
+            "market_cap_daily_pit": {
+              "exists": true,
+              "dataset": "ashare.market_cap_daily_pit",
+              "row_count": 90,
+              "symbol_count": 10,
+              "start": "2016-01-01 00:00:00+00:00",
+              "end": "2016-01-30 00:00:00+00:00",
+              "content_hash": "xyz",
+              "storage_format": "delta"
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    args = datactl.main_argparse_for_test(
+        [
+            "compare-status",
+            "--data-root",
+            str(local_root),
+            "--other-status",
+            str(other_status),
+            "--left-label",
+            "workstation",
+            "--right-label",
+            "rtx5090",
+        ]
+    )
+
+    summary = datactl.compare_status(args)
+
+    assert summary["mismatch_count"] >= 1
+    mismatch = next(item for item in summary["comparisons"] if item["artifact"] == "market_cap_daily_pit")
+    assert mismatch["artifact"] == "market_cap_daily_pit"
+    assert mismatch["match"] is False
+    assert {item["field"] for item in mismatch["diffs"]} >= {"row_count", "end", "content_hash"}
+
+
 def test_migrate_sidecars_to_delta_dry_run_plans_delta_promotion(tmp_path):
     datactl = _load_datactl()
     args = datactl.main_argparse_for_test(
