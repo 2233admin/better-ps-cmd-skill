@@ -4,6 +4,34 @@ Branch: `factor-framework-merge`
 Base: `origin/main @ f640dab`  
 Date: `2026-05-19`
 
+### Status Update — 2026-05-20
+
+This handoff doc was written 2026-05-19 14:39, before `origin/crypto` shipped the
+W1 ship-gate work later the same day (Lane D DSR/PBO methodology,
+Lane I A股 universe mining wire, Lane J dual-universe daily-evo runner).
+
+Supersedes:
+
+- **Next Steps #5** ("Do not port crypto mining runners or funding/OI scripts
+  into shared runtime") — stale. `scripts/run-daily-evo.py` + `methodology/dsr_pbo.py`
+  are the W1 ship-gate machinery and must be ported onto this branch via PR-3
+  (B-axis) after the factor adapter interface (PR-1) is stable.
+
+Three-axis merge plan now in effect (target = this branch, integration order
+A → C → B, then promote to `main` after W1 ship-gate rerun passes):
+
+- A-axis (factor abstraction) — port Lane I 13 features into
+  `markets/ashare/adapter.py`, supersedes the temporary
+  `mine.py::_get_inst_col(universe)` gate.
+- C-axis (data ingest) — warehouse-first wins; drop `delta_lake.py` +
+  `chinadata` ingest chain; keep `init-data-lake-layout.py` +
+  `ingest-ashare-tradability.py` + `ASHARE_DATA_PIT_SPEC.md`.
+- B-axis (mining execution) — port `dsr_pbo.py` + `run-daily-evo.py` and
+  rewrite `mine.py` against the new adapter interface.
+
+`archive/crypto-w1-complete` tag pinned at `crypto @ bfab2d2` before any
+porting started, so W1 lineage is reachable indefinitely.
+
 ### What Landed
 
 First-pass shared factor-core skeleton was added without changing live A-share
