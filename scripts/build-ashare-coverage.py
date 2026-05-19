@@ -3,15 +3,52 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.data.delta_lake import dataset_stats, resolve_delta_or_parquet
+import polars as pl
+
+
+def resolve_delta_or_parquet(parquet_path: Path) -> Path | None:
+    return parquet_path if parquet_path.exists() else None
+
+
+def dataset_stats(path: Path) -> dict[str, Any]:
+    lazy = pl.scan_parquet(path)
+    schema = lazy.collect_schema()
+    selectors = [pl.len().alias("row_count")]
+    if "symbol" in schema.names():
+        selectors.append(pl.col("symbol").n_unique().alias("symbol_count"))
+    if "event_time" in schema.names():
+        selectors.extend(
+            [
+                pl.col("event_time").min().alias("start"),
+                pl.col("event_time").max().alias("end"),
+            ]
+        )
+    stats = lazy.select(selectors).collect().row(0, named=True)
+    payload = {
+        k: str(v) if k in {"start", "end"} else int(v)
+        for k, v in stats.items()
+    }
+    payload["content_hash"] = _parquet_file_hash(path)
+    payload["storage_format"] = "parquet"
+    return payload
+
+
+def _parquet_file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main(argv: list[str] | None = None) -> int:
