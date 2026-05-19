@@ -10,10 +10,12 @@ from .dsr_pbo import (
     deflated_sharpe_ratio,
     dsr_filter,
 )
+from .regime import expanding_fit_hmm
 
 __all__ = [
     "deflated_sharpe_ratio",
     "cscv_pbo",
     "benjamini_hochberg",
     "dsr_filter",
+    "expanding_fit_hmm",
 ]

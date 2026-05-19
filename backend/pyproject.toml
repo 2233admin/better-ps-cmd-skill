@@ -28,6 +28,7 @@ dependencies = [
     "getdaft>=0.5.0",
     "gplearn>=0.4.2",
     "scikit-learn>=1.3.0",
+    "hmmlearn>=0.3.3",
 ]
 
 [dependency-groups]
