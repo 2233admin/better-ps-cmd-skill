@@ -40,7 +40,11 @@ For each refit era [era_start, era_end):
   3. For each subsequent day in the era, do a single incremental step:
        log_alpha[t] = logsumexp(log_alpha[t-1] + log_trans, axis=0) + log_frame[t]
 This is O(T) total in forward filtering (was O(T^2) in the day-by-day
-prefix-recompute baseline; CSI300 21yr went from 82s -> sub-second).
+prefix-recompute baseline). CSI300 21yr / 246 refits: 82s -> 12s (~7x):
+numba JIT (3.3x), then n_iter=15 with cold-init each refit (~2x more).
+Warm-start across refits was tested and rejected: it sticks at local
+optima as the regime distribution shifts (bear-state mass collapsed from
+~35% to 0% in 2015 Q3 crash with warm-start enabled).
 
 Anti-pattern this guards against: `model.fit(full_series); model.predict_proba(full_series)`
 would leak future returns into past regime labels (Viterbi smoothing uses the
@@ -204,14 +208,17 @@ def expanding_fit_hmm(
 
     t = min_train
     while t < T:
-        # Refit on prefix r[:t]
+        # Refit on prefix r[:t]. Cold-init each era — warm-starting from prev era
+        # sticks at local optima as the data distribution shifts (verified on
+        # CSI300 21yr: bear-state mass collapsed from ~35% to 0% in 2015 crash
+        # with warm-start enabled). EM cold-converges in ~10-15 iters per fit.
         train = r[:t].reshape(-1, 1)
         model = GaussianHMM(
             n_components=n_states,
             covariance_type="diag",
-            n_iter=50,
+            n_iter=15,
             random_state=seed,
-            tol=1e-3,
+            tol=1e-4,
         )
         model.fit(train)
         perm = _label_states_by_mean(model)
