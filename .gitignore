@@ -18,9 +18,12 @@ venv/
 /.claude/
 /.vibeskills/
 /.data/
+/.tmp-port/
+/artifacts/
 /outputs/
 /data/
 /DATA/
+backend/outputs/
 backend/.anton/
 backend/C:/
 backend/data/
