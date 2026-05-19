@@ -385,7 +385,7 @@ uv run python ..\scripts\check-ashare-factor-data-readiness.py `
   --json
 ```
 
-Current readiness after syncing ChinaData status plus factor sidecars is:
+Current readiness after syncing PIT factor sidecars is:
 
 ```text
 price factors: ready
@@ -403,38 +403,12 @@ The report is written to:
 DATA/Ashare/_manifest/factor_data_readiness.json
 ```
 
-## ChinaData Factor Sidecars
+## Factor Sidecars (Deprecated 2026-05-20)
 
-The paid ChinaData/Tushare path is used to fill the daily fields that TDX does
-not carry well enough for factor research. The current sidecar mapping is:
+(Deprecated vendor-first path — see XAR-453 for warehouse-first ingest details.)
 
-```text
-daily_basic -> pit/market_cap_daily_pit/
-bak_daily -> pit/industry_daily_pit/
-share_float -> pit/share_float_event_pit/
-```
-
-Sync them explicitly:
-
-```powershell
-cd C:\Users\Administrator\projects\k-atana
-uv run --project backend python scripts\ashare-datactl.py sync-chinadata-factors `
-  --data-root DATA\Ashare `
-  --start 2016-01-01 `
-  --end 2026-05-18 `
-  --json
-```
-
-Current real output on the local lake:
-
-```text
-market_cap_daily_pit: 750,000 rows, 5,755 symbols, 2016-01-27 -> 2026-05-18
-industry_daily_pit: 756,000 rows, 5,766 symbols, 2017-06-28 -> 2026-05-18
-share_float_event_pit: 58,765 rows, 171 symbols, 2016-12-28 -> 2026-05-18
-```
-
-`build-ashare-backtest-view.py` now joins visible `market_cap_daily_pit` and
-`industry_daily_pit` rows from either Delta or Parquet into
+`build-ashare-backtest-view.py` joins visible `market_cap_daily_pit` and
+`industry_daily_pit` rows from Parquet into
 `backtest_daily_pit_YYYYMMDD.parquet`, so the default factor-backtest entry
 surface already carries:
 

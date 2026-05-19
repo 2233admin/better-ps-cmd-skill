@@ -1,11 +1,6 @@
-"""Compatibility shim for legacy imports.
+"""Factor definitions and family metadata."""
 
-The shared factor core is being reorganized under ``definitions`` and
-``primitives``. Keep this module as a stable re-export surface until runtime
-callers move off the legacy path.
-"""
-
-from app.research.factors.definitions.families import (
+from .families import (
     FAMILIES,
     MOMENTUM_RESID_VOL_SPEC,
     QUALITY_ROE_SPEC,

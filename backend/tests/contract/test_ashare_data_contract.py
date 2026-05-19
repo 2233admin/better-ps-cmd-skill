@@ -33,12 +33,10 @@ def test_runtime_and_active_scripts_do_not_hardcode_old_duckdb_root():
         root / "backend" / "app" / "data" / "paths.py",
         root / "backend" / "app" / "macro" / "knowledge.py",
         root / "backend" / "tools" / "data" / "import_csv_to_duckdb.py",
-        root / "backend" / "tools" / "data" / "fetch_tushare_gaps.py",
         root / "backend" / "tools" / "data" / "duckdb_schema.py",
         root / "backend" / "tools" / "data" / "duckdb_catalog.py",
         root / "backend" / "run_backtest.py",
-        root / "scripts" / "export-ashare-duckdb-to-lake.py",
-        root / "scripts" / "sync-ashare-pit-to-duckdb.py",
+        root / "scripts" / "ingest-ashare-aquant-tdx.py",
     ]
 
     for path in targets:

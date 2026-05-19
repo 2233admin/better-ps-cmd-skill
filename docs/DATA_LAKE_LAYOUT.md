@@ -151,23 +151,15 @@ uv run --project backend python scripts\ashare-datactl.py download-tdx-raw `
   --symbol-scope all
 ```
 
-ChinaData factor sidecars are also explicit:
-
-```powershell
-uv run --project backend python scripts\ashare-datactl.py sync-chinadata-factors `
-  --data-root DATA\Ashare `
-  --start 2016-01-01 `
-  --end 2026-05-18
-```
-
-This writes:
+Factor sidecars are managed via warehouse-first ingest (see XAR-453):
 
 ```text
 DATA/Ashare/pit/market_cap_daily_pit/
 DATA/Ashare/pit/industry_daily_pit/
 DATA/Ashare/pit/share_float_event_pit/
-DATA/Ashare/_manifest/chinadata_factor_sidecars.json
 ```
+
+(Vendor-first `sync-chinadata-factors` deprecated 2026-05-20.)
 
 Dry-run the orchestration before changing files:
 

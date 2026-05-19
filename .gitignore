@@ -17,10 +17,14 @@ venv/
 *.sqlite3
 /.claude/
 /.vibeskills/
+/.data/
+/.tmp-port/
+/artifacts/
 /outputs/
 /data/
 /DATA/
 /tmp/
+backend/outputs/
 backend/.anton/
 backend/C:/
 backend/data/
