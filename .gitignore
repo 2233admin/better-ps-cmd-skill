@@ -17,6 +17,7 @@ venv/
 *.sqlite3
 /.claude/
 /.vibeskills/
+/.data/
 /outputs/
 /data/
 /DATA/
