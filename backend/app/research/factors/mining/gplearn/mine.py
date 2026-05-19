@@ -240,11 +240,14 @@ def evaluate_factor_callable(
 
     predict_fn: callable(X: np.ndarray) -> np.ndarray (1-D signal)
     bundle:     UniverseBundle (for df_feat and asset_col)
-    df_clean:   NaN-dropped frame aligned row-for-row with X_full
+    df_clean:   NaN-dropped frame aligned row-for-row with X_full (gplearn-eligible rows)
     X_full:     feature matrix aligned with df_clean
 
-    Uses 1-bar log-return (next_ret) as scoring target so IC numbers are
-    comparable across universes.
+    P0-1 fix: NaN/inf filtering happens PER FOLD on the full panel (not globally
+    pre-split), preventing future-cleanliness leakage into evaluation.
+    P0-4 fix: Uses 1-bar forward return (shift(-1) per asset) as IC scoring target,
+    not backward/current return. Evaluation target = 1-bar forward.
+    Training target = configurable fwd_ret_<N>d.
 
     PERF-NOTE: df_eval.filter(pl.col("event_time").is_in(oos_times.to_list()))
     on a large panel triggers a linear scan per fold.  An integer-indexed
@@ -262,15 +265,29 @@ def evaluate_factor_callable(
     asset_col = bundle["asset_col"]  # always "asset_id" after adapter rename
     df_feat = bundle["df_feat"]
 
-    # Attach 1-bar next_ret for IC scoring
-    df_eval = df_clean.sort([asset_col, "event_time"]).with_columns(
-        pl.col("close").log(base=math.e).diff().over(asset_col).alias("next_ret")
-    )
+    # P0-4 FIX: Build forward_ret on the FULL unfiltered panel (df_feat), not df_clean.
+    # forward_ret[t] = log(close[t+1]) - log(close[t]), grouped per asset.
+    # Using shift(-1) on _log_close to avoid chaining diff().shift() confusion.
+    # Last row per asset will be NaN; per-fold is_finite filter handles it.
+    # Evaluation target = 1-bar forward. Training target = configurable fwd_ret_<N>d.
+    # (The old "next_ret" was current/backward: log(close[t]) - log(close[t-1]).)
+    df_full = df_feat.sort([asset_col, "event_time"]).with_columns(
+        pl.col("close").log(base=math.e).alias("_log_close")
+    ).with_columns(
+        (pl.col("_log_close").shift(-1).over(asset_col) - pl.col("_log_close")).alias("forward_ret")
+    ).drop("_log_close")
 
+    # P0-1 FIX: Signals are predicted on df_clean (the NaN/inf-eligible rows used
+    # for gplearn training). Attach signals back via join so df_full rows outside
+    # df_clean (future-null or non-finite) stay in the full panel with signal=null.
+    # Per-fold NaN/inf filtering happens INSIDE each fold (not globally pre-split),
+    # preventing future-cleanliness leakage into the training fold.
     signals = predict_fn(X_full)
-    df_eval = df_eval.with_columns(
+    # Build a signal lookup keyed on (asset_col, event_time) from df_clean rows.
+    df_signal_map = df_clean.select([asset_col, "event_time"]).with_columns(
         pl.Series("signal", signals.astype(np.float64))
     )
+    df_eval = df_full.join(df_signal_map, on=[asset_col, "event_time"], how="left")
 
     all_times = df_eval["event_time"].unique().sort()
     n_times = len(all_times)
@@ -287,10 +304,15 @@ def evaluate_factor_callable(
 
     for fold_idx, (_, test_idx) in enumerate(tscv.split(range(n_times))):
         oos_times = all_times[list(test_idx)]
-        df_oos = df_eval.filter(pl.col("event_time").is_in(oos_times.to_list()))
+        # P0-1: drop_nulls and finite filter PER FOLD (not globally pre-split).
+        df_oos = df_eval.filter(
+            pl.col("event_time").is_in(oos_times.to_list())
+        ).drop_nulls(subset=["signal", "forward_ret"]).filter(
+            pl.col("signal").is_finite() & pl.col("forward_ret").is_finite()
+        )
 
         sig_arr = df_oos["signal"].to_numpy()
-        ret_arr = df_oos["next_ret"].to_numpy()
+        ret_arr = df_oos["forward_ret"].to_numpy()
         ic, ic_t = _compute_ic(sig_arr, ret_arr)
 
         # Sharpe gate uses asset_id column name (canonical after adapter)

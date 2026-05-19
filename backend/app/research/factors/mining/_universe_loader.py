@@ -22,6 +22,7 @@ materialization is in mine.py::_to_numpy_generic at fit time.
 from __future__ import annotations
 
 import math
+import warnings
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -184,6 +185,7 @@ def load_ashare(
     macro_parquet: str | Path | None = None,
     target_days: int = 5,
     sample_symbols: int | None = None,
+    symbols: list[str] | None = None,
 ) -> UniverseBundle:
     """Load and feature-engineer A-share daily PIT data.
 
@@ -205,6 +207,11 @@ def load_ashare(
         Forward return horizon in trading days (default 5).
     sample_symbols:
         Randomly sample N symbols before feature engineering (smoke runs).
+        WARNING: sampling without an as-of snapshot may introduce survivorship bias.
+        Prefer passing ``symbols`` explicitly with a universe snapshot.
+    symbols:
+        Explicit list of symbols to include (takes precedence over sample_symbols).
+        Use a universe snapshot as-of training start date to avoid survivorship bias.
 
     Returns
     -------
@@ -223,7 +230,18 @@ def load_ashare(
     )
     combined = kline_core.join(val_core, on=["symbol", "event_time"], how="inner")
 
-    if sample_symbols is not None:
+    # P0-3 FIX: Universe sampling survivorship bias guard.
+    # Explicit symbols list (from an as-of snapshot) wins; random sampling
+    # without an as-of snapshot may include symbols only known to survive the
+    # full period and must emit a warning.
+    if symbols is not None:
+        combined = combined.filter(pl.col("symbol").is_in(symbols))
+    elif sample_symbols is not None:
+        warnings.warn(
+            "Universe sampling without as-of snapshot — may include survivorship bias. "
+            "Pass `symbols` explicitly from a universe snapshot as-of training start date.",
+            stacklevel=2,
+        )
         syms = combined["symbol"].unique().sample(n=sample_symbols, seed=42).to_list()
         combined = combined.filter(pl.col("symbol").is_in(syms))
 
@@ -262,7 +280,7 @@ def load_for_mining(universe: str, **paths: Any) -> UniverseBundle:
         Forwarded to load_crypto() or load_ashare() as kwargs.
         Crypto: combined_parquet
         Ashare: kline_parquet, valuation_parquet, industry_parquet,
-                macro_parquet, target_days, sample_symbols
+                macro_parquet, target_days, sample_symbols, symbols
 
     Raises
     ------
