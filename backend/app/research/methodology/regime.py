@@ -85,11 +85,63 @@ Choose the variant based on use case:
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import polars as pl
 from hmmlearn.hmm import GaussianHMM
 from numba import njit
 from scipy.stats import multivariate_normal
+
+_log = logging.getLogger(__name__)
+
+# Column names targeted by log1p in `expanding_fit_hmm_batched` when caller
+# passes feat_names. Validated on the 20-feature universe panel (XAR-467):
+# range_20d std 1.22 -> 0.07, amihud_20d std 171 -> 0.05, vol_accel std 93 -> 0.29.
+# Standard Amihud-2002 transform on non-negative heavy-tail ratios. PIT-safe.
+LOG1P_FEATURE_NAMES: tuple[str, ...] = ("range_20d", "amihud_20d", "vol_accel")
+
+# Fallback positional indices if caller does NOT pass feat_names. Matches the
+# canonical feature order in build_universe_panel_full.py.
+LOG1P_DEFAULT_INDICES: tuple[int, ...] = (10, 12, 18)
+
+
+def _resolve_log1p_indices(
+    D: int, feat_names: list[str] | None
+) -> tuple[int, ...]:
+    if feat_names is None:
+        return tuple(i for i in LOG1P_DEFAULT_INDICES if i < D)
+    name_to_idx = {n: i for i, n in enumerate(feat_names)}
+    return tuple(
+        name_to_idx[n] for n in LOG1P_FEATURE_NAMES if n in name_to_idx
+    )
+
+
+def _normalize_features(
+    panel_raw: np.ndarray,
+    fit_end_idx: int,
+    D: int,
+    jitter_rng: np.random.Generator,
+) -> np.ndarray:
+    """Expanding-window z-score over panel[:, :fit_end_idx, :].
+
+    PIT-safe: mu/sigma are computed ONLY on the training slice; the out-of-sample
+    tail is normalized using those training stats (no future leakage). Sigma
+    floor 1e-3 (NOT 1e-8) prevents post-clip zero-variance partitions that
+    trip pomegranate's "Variances must be positive" check inside EM. Jitter
+    sigma=1e-3 breaks degenerate ties that collapse EM components.
+
+    See XAR-467-PHASE1.md for the v3 bench that validated these constants.
+    """
+    train = panel_raw[:, :fit_end_idx, :].reshape(-1, D)
+    mu = train.mean(axis=0)
+    sigma = train.std(axis=0)
+    sigma = np.where(sigma < 1e-3, 1e-3, sigma)
+    z = (panel_raw - mu) / sigma
+    z = np.clip(z, -10, 10).astype(np.float32)
+    z = np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
+    z += jitter_rng.normal(0, 1e-3, size=z.shape).astype(np.float32)
+    return z
 
 
 @njit(cache=True, fastmath=True)
@@ -310,8 +362,13 @@ def expanding_fit_hmm_batched(
     device: str = "auto",
     max_iter: int = 15,
     tol: float = 1e-4,
+    t_max: int | None = 1000,
+    normalize: bool = True,
+    feat_names: list[str] | None = None,
+    n_retries: int = 3,
+    min_active_states: int = 4,
 ) -> np.ndarray:
-    """Batched cross-section HMM with PIT-safe expanding refit (XAR-466).
+    """Batched cross-section HMM with PIT-safe expanding refit (XAR-466 / XAR-467).
 
     Fits ONE DenseHMM with `n_states` regimes SHARED across all B series.
     Each series gets its own posterior P(state_t | obs[1:t]) over the universal
@@ -320,14 +377,29 @@ def expanding_fit_hmm_batched(
     posterior reflects whether THAT series is in each state at each step.
 
     Backed by pomegranate v1.x; runs on cu132 + sm_120 (RTX 5090 Blackwell).
-    Benchmarked GPU speedup (vs pomegranate CPU, same model, max_iter=10):
-      (B= 300, K= 8, D=20, T= 914)  1.39x  (orchestration overhead dominates)
-      (B=1500, K= 8, D=20, T= 141)  2.92x
-      (B=1500, K=16, D=20, T= 141)  4.89x  (K=16 makes compute amortize fully)
-    GPU absolute time floor ~430ms at B=1500; CPU scales sub-linearly with B.
-    A fused Triton/CUDA forward kernel could push another ~2x but per the
-    "能加速的加速 / 真的影响效率的换 rust" directive, pomegranate is still
-    in the "加速" range -- no rewrite needed unless B>5000 plateaus.
+    Production-shape bench (XAR-466 Phase 2 v3, B=7504 T=1889 D=20 K=8, T_max=1000):
+      total 66-refit walk-forward scan  6m02s
+      per-refit fit  ~2.6s,  per-refit norm  ~2.5s,  GPU peak 5.2 GB
+      avg n_active states  6.4 / 8 (6 sporadic collapses, see seed-retry below)
+
+    Normalization
+    -------------
+    log1p applied once to heavy-tail non-negative ratios (range_20d, amihud_20d,
+    vol_accel) -- Amihud-2002 standard for illiquidity factors. Cell-wise and
+    monotonic, so PIT-safe. Then expanding-window z-score per refit, computed on
+    `panel[:, :fit_end_idx, :]` only (out-of-sample slice normalized with training
+    stats carries no future information). Sigma floor 1e-3, jitter sigma=1e-3.
+    Set `normalize=False` for testing on already-standardized panels.
+
+    Seed-retry
+    ----------
+    Cross-section multi-modal feature distribution lets EM converge to a single
+    dominant mode on bad cold-init seeds. ~9% of refits land in degenerate local
+    optima where one state captures >99% mass. If `n_active < min_active_states`
+    after a fit, re-init with a fresh seed and retry up to `n_retries` times. If
+    all attempts degenerate, the highest-n_active attempt is accepted and a
+    WARNING is logged. Cold-init each refit (NOT warm-start) -- warm-start
+    sticks at local optima in this panel shape (verified XAR-466 Phase 2 v2).
 
     Parameters
     ----------
@@ -339,12 +411,24 @@ def expanding_fit_hmm_batched(
     n_states : 8 by default (e.g. crash / bear / weak / neutral / weak-bull /
         bull / momentum / euphoria). Set 3 to mirror single-series semantics.
     min_train : warmup -- rows < min_train get NaN.
-    refit_every : refit cadence in steps. Between refits, log_alpha is rolled
-        forward using the era's shared params (PIT-safe forward filtering).
+    refit_every : refit cadence in steps.
     seed : reproducibility for EM init.
     device : "cuda" | "cpu" | "auto" (auto picks cuda if torch.cuda.is_available).
     max_iter : EM max iterations per refit.
     tol : EM convergence tolerance.
+    t_max : sliding cap on training window size. Per-refit cost is O(B*T_train*K^2);
+        bounding T_train keeps wall-clock flat as T grows. Default 1000 (per
+        XAR-466 Phase 2 v2 bench, drops 9.7 GB peak to 5.2 GB, ~1.33x speedup).
+        Pass None to disable the cap (expanding window).
+    normalize : apply log1p + expanding z-score before fit. Default True. The
+        canonical k-atana 20-feature panel needs this; turning off is only for
+        testing or already-standardized inputs.
+    feat_names : optional list of D column names. If provided, log1p targets
+        the subset of LOG1P_FEATURE_NAMES that appear in feat_names. If None,
+        falls back to LOG1P_DEFAULT_INDICES.
+    n_retries : retries with fresh seed when state collapse detected.
+    min_active_states : threshold for accepting a fit. n_active = number of
+        states whose labeled frequency in the era posterior exceeds 1%.
 
     Returns
     -------
@@ -360,8 +444,8 @@ def expanding_fit_hmm_batched(
     rolls log_alpha forward with FIXED params from the most recent fit.
     """
     import torch
-    from pomegranate.hmm import DenseHMM
     from pomegranate.distributions import Normal
+    from pomegranate.hmm import DenseHMM
 
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -373,49 +457,136 @@ def expanding_fit_hmm_batched(
         raise ValueError(f"panel has T={T}, need >= {min_train + 1}")
     if not (0 <= label_dim < D):
         raise ValueError(f"label_dim {label_dim} out of range [0,{D})")
+    if feat_names is not None and len(feat_names) != D:
+        raise ValueError(
+            f"feat_names length {len(feat_names)} != D={D}"
+        )
+    if n_retries < 1:
+        raise ValueError(f"n_retries must be >= 1, got {n_retries}")
 
     rng = np.random.default_rng(seed)
     probs = np.full((B, T, n_states), np.nan, dtype=np.float32)
 
+    # log1p prep, once.
+    if normalize:
+        log1p_cols = _resolve_log1p_indices(D, feat_names)
+        panel_norm_raw = panel.astype(np.float32, copy=True)
+        for c in log1p_cols:
+            panel_norm_raw[:, :, c] = np.log1p(
+                np.clip(panel[:, :, c], 0.0, None)
+            )
+    else:
+        panel_norm_raw = panel.astype(np.float32, copy=False)
+
+    def _build_dists(local_rng: np.random.Generator) -> list:
+        dists_out = []
+        for _ in range(n_states):
+            m = local_rng.uniform(-0.5, 0.5, D).tolist()
+            cov = np.ones(D, dtype=np.float32).tolist()
+            d = Normal(
+                means=m,
+                covs=cov,
+                covariance_type="diag",
+                min_cov=1e-4,
+            )
+            if device == "cuda":
+                d = d.cuda()
+            dists_out.append(d)
+        return dists_out
+
     t = min_train
     while t < T:
         era_end = min(t + refit_every, T)
+        train_start = max(0, t - t_max) if t_max is not None else 0
+        train_T = t - train_start
 
-        # Cold-init each era (warm-start across eras sticks at local optima,
-        # see expanding_fit_hmm docstring).
-        dists = []
-        for _ in range(n_states):
-            m = rng.normal(0, 1e-3, D).tolist()
-            cov = np.eye(D, dtype=np.float32).tolist()
-            d = Normal(means=m, covs=cov, covariance_type="full")
+        # Normalize the (train + era) window using training-slice stats only.
+        if normalize:
+            win = _normalize_features(
+                panel_norm_raw[:, train_start:era_end, :],
+                fit_end_idx=train_T,
+                D=D,
+                jitter_rng=rng,
+            )
+        else:
+            win = panel_norm_raw[:, train_start:era_end, :]
+
+        best_n_active = -1
+        best_probs_slice: np.ndarray | None = None
+        last_attempt_idx = 0
+
+        for attempt in range(n_retries):
+            attempt_rng = np.random.default_rng(
+                int(rng.integers(0, 2**31 - 1))
+            )
+            dists = _build_dists(attempt_rng)
+            model = DenseHMM(
+                distributions=dists,
+                max_iter=max_iter,
+                tol=tol,
+                verbose=False,
+            )
             if device == "cuda":
-                d = d.cuda()
-            dists.append(d)
-        model = DenseHMM(distributions=dists, max_iter=max_iter, tol=tol, verbose=False)
-        if device == "cuda":
-            model.cuda()
+                model.cuda()
 
-        # Fit on prefix panel[:, :t, :]
-        X_train = torch.tensor(panel[:, :t, :], dtype=torch.float32)
-        if device == "cuda":
-            X_train = X_train.cuda()
-        model.fit(X_train)
+            X_train = torch.tensor(
+                win[:, :train_T, :], dtype=torch.float32
+            )
+            if device == "cuda":
+                X_train = X_train.cuda()
+            model.fit(X_train)
 
-        # Forward filter on prefix [:era_end] with FIXED era params.
-        # model.forward(X) -> log_alpha shape (B, era_end, K) under v1.x.
-        X_era = torch.tensor(panel[:, :era_end, :], dtype=torch.float32)
-        if device == "cuda":
-            X_era = X_era.cuda()
-        log_alpha = model.forward(X_era)  # (B, era_end, K)
+            X_era = torch.tensor(win, dtype=torch.float32)
+            if device == "cuda":
+                X_era = X_era.cuda()
+            log_alpha = model.forward(X_era)
+            rel_start = train_T
+            rel_end = train_T + (era_end - t)
+            post = (
+                torch.softmax(log_alpha[:, rel_start:rel_end, :], dim=-1)
+                .detach()
+                .cpu()
+                .numpy()
+            )
 
-        # Posterior over rows [t, era_end) only (warmup rows stay NaN since
-        # they're set in earlier eras or remain unset before min_train).
-        post = torch.softmax(log_alpha[:, t:era_end, :], dim=-1).detach().cpu().numpy()
+            means_stack = torch.stack(
+                [d.means for d in model.distributions]
+            )
+            perm = (
+                means_stack[:, label_dim].argsort().detach().cpu().numpy()
+            )
+            labeled = post[..., perm].astype(np.float32)
+            argmax = labeled.argmax(axis=-1)
+            freq = np.bincount(
+                argmax.flatten(), minlength=n_states
+            ).astype(np.float64)
+            freq /= freq.sum()
+            n_active = int((freq > 0.01).sum())
 
-        # Sort states by mean along label_dim (lowest = bear at index 0).
-        means_stack = torch.stack([d.means for d in model.distributions])  # (K, D)
-        perm = means_stack[:, label_dim].argsort().detach().cpu().numpy()
-        probs[:, t:era_end, :] = post[..., perm].astype(np.float32)
+            if device == "cuda":
+                del X_train, X_era, log_alpha
+                torch.cuda.empty_cache()
+
+            last_attempt_idx = attempt
+            if n_active > best_n_active:
+                best_n_active = n_active
+                best_probs_slice = labeled
+
+            if n_active >= min_active_states:
+                break
+
+        if best_n_active < min_active_states:
+            _log.warning(
+                "regime HMM refit collapsed: t=%d n_active=%d/%d "
+                "after %d retries; accepting best attempt",
+                t,
+                best_n_active,
+                n_states,
+                last_attempt_idx + 1,
+            )
+
+        assert best_probs_slice is not None  # at least one attempt ran
+        probs[:, t:era_end, :] = best_probs_slice
 
         t = era_end
 
