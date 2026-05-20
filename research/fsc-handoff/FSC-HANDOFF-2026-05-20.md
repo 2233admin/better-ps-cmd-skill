@@ -1,20 +1,37 @@
 # Pre-live blocker handoff (2026-05-20)
 
-K-atana 距上钱的全部 blocker, 按执行路径分三桶:
+K-atana 距上钱的全部 blocker, 用 **cascade 控制系统** 视角设计 (方法论 `E:/knowledge/05-Engineering/exp-2026-05-20-abc-task-triage-for-agents.md`).
 
-- **A. FSC** -- autonomous full-self-coding, Curry 不在场
-- **B. HUMAN+CODE** -- Curry 在场 (键盘/登录/物理动作) + Claude 或 Codex 当写手
-- **C. 拍板** -- FSC/B 出候选, Curry 最终决策
+## 两个正交维度
 
-依赖图见末尾。FSC 票 pick-up 时只看 A 桶, B/C 走另一条 session。
+```
+维度 1: 执行路径 (谁当 controller)
+  A = FSC autonomous           (controller = code, Curry 不在场)
+  B = HUMAN+CODE sensor-bridge (controller = code, Curry 当 missing sensor+actuator)
+  C = supervisory control      (controller = Curry, 慢环价值判断)
+
+维度 2: cascade 层 + trigger 类型 (loop 怎么跑)
+  L0  战略层 (months loop)        trigger: manual only
+  L1  外环 (weeks loop)            trigger: manual / event (drift) / clock (review)
+  L2  中环 (days-weeks loop)       trigger: manual / event / clock (任选, 不默认)
+  L3  内环 (ms-s loop)             trigger: continuous always-on
+```
+
+**Manual push 是合法 controller 设计**, 不是降级 fallback. L1/L2 不必"每日跑", 罕见/价值密集事件 manual trigger 更优.
+
+每项任务下方标 **[桶 | L层 | trigger]** 三元组.
+
+依赖图 + cascade set-point 流向见末尾.
 
 ---
 
-## A 桶 -- FSC 自动
+## A 桶 -- FSC 自动 (controller = code)
 
 ### A1. 停牌/涨跌停数据源对照 (XAR-480)
 
-**目标**: 跑 akshare / baostock / TDX / SSE 官网四路对照, 出准确率 + 延迟 + 成本表, 给 C1 拍板提供证据.
+**[A | L2 | manual or event-on-source-change]** -- 不是 daily scheduler, 是 plant identification (sensor 输出对比), 跑一次出报告即可, 数据源变化或半年 review 才重跑.
+
+**目标**: 跑 akshare / baostock / TDX / SSE 官网四路对照, 出准确率 + 延迟 + 成本表, 给 C1 拍板提供证据. **本质 = sensor calibration**, 给 L1 supervisory controller 提供选 sensor 的依据.
 
 **步骤**:
 1. 选 5 个 2026 年实际停牌股 + 5 个一字涨停 + 5 个一字跌停 (查 wind 历史)
@@ -30,7 +47,9 @@ K-atana 距上钱的全部 blocker, 按执行路径分三桶:
 
 ### A2. 订单状态机 + persistence (XAR-481)
 
-**目标**: 把 `backend/app/trading/adapters/{qmt,crypto,crypto_pipeline}/reconciliation.py` 三个纯函数模块包成正式状态机.
+**[A | L3 | continuous]** -- 状态机本身是 L3 内环 plant 模型, 服务于 pretrade/kill switch 等 L3 controllers. 一次性写好不重跑.
+
+**目标**: 把 `backend/app/trading/adapters/{qmt,crypto,crypto_pipeline}/reconciliation.py` 三个纯函数模块包成正式状态机. **本质 = plant state observer**, 让 L3 多个 controller 共享统一观测.
 
 **状态图** (落 `docs/order-state-machine.md`):
 ```
@@ -53,7 +72,9 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A3. Pre-trade 风控评估器 (XAR-482)
 
-**目标**: 订单循环里阻断 ST/停牌/涨跌停/北交所门槛/两融状态.
+**[A | L3 | continuous]** -- 实时 disturbance rejection. set-point 从 C1 (数据源) + C2 (阈值) cascade 下来.
+
+**目标**: 订单循环里阻断 ST/停牌/涨跌停/北交所门槛/两融状态. **本质 = L3 控制器**, 干扰 (ST/停牌等) 出现时 reject 订单, 跟踪 "合规态" set-point.
 
 **前置**: A1 完成 (知道用哪个数据源) + C1 拍板.
 
@@ -69,7 +90,9 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A4. Kill switch 三路触发 (XAR-482)
 
-**目标**: 文件 / heartbeat / 显式 API 三路触发, <=5s 停所有新单 + 撤所有挂单.
+**[A | L3 | continuous + event]** -- 三路 actuator: 文件 (manual override), heartbeat-event, 显式 API. reset 必须 manual (避免自动 spurious recovery).
+
+**目标**: 文件 / heartbeat / 显式 API 三路触发, <=5s 停所有新单 + 撤所有挂单. **本质 = L3 emergency actuator**, supervisory (Curry) 直接 manual override 入口.
 
 **前置**: A2 状态机已落.
 
@@ -81,7 +104,9 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A5. Heartbeat 四路 (XAR-483)
 
-**目标**: 进程 / 交易桥 / 行情桥 / 风控 四路心跳, 掉线 -> alert + kill switch trip.
+**[A | L3 | continuous]** -- L3 sensor (liveness), 喂 L3 actuator (kill switch) + L1 alert router.
+
+**目标**: 进程 / 交易桥 / 行情桥 / 风控 四路心跳, 掉线 -> alert + kill switch trip. **本质 = L3 liveness sensor**, 干扰 (进程死/网抖) 检出 -> 触发内环 disturbance rejection.
 
 **前置**: A4 kill switch + A7 alert router (alert 可后挂).
 
@@ -93,9 +118,11 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A6. Alert router (XAR-483)
 
+**[A | L1-L3 bridge | event]** -- 跨层 alert 通道. L3 event 触发 -> Curry (L0/L1 supervisory controller) 感知通道. dedup/cooldown 是 sensor 噪声滤波.
+
 **前置**: B2 webhook 已落 .env.
 
-**目标**: 三档 (critical/warn/info) 路由, dedup + cooldown.
+**目标**: 三档 (critical/warn/info) 路由, dedup + cooldown. **本质 = L3 -> L0/L1 上行 sensor**, 让 supervisory controller (Curry) 在慢环里看到内环异常.
 
 **步骤**: `backend/app/ops/alert.py`, `Alert(level, source, key, message, ts)` dataclass, `AlertRouter.send` 异步, cooldown critical 1min/warn 5min/info 30min. 钉钉用 `dingtalkchatbot` SDK, 飞书直 `requests.post` (无成熟 SDK, schema 简单, 这条是 vendor-sdk rule 例外). 失败 3 次指数退避后落 `data/alert_failure.log`.
 
@@ -105,7 +132,9 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A7. 风控阈值候选 (XAR-482, 喂 C2)
 
-**目标**: walk-forward backtest 5 年出阈值分布, 给 C2 拍板提供数字.
+**[A | L1 | manual or event]** -- 不是 daily, 是 plant identification 一次性跑 + 季度 review 或 drift 报警时重跑. Curry 主动推 / 策略变化触发 / 半年 review trigger 三选一.
+
+**目标**: walk-forward backtest 5 年出阈值分布, 给 C2 拍板提供数字. **本质 = L1 supervisory controller 的 sensitivity 报告**, "set-point 改 X% -> output 改 Y%".
 
 **步骤**:
 1. Backtest engine 跑 2021-2025, 出每日 PnL 序列
@@ -119,7 +148,9 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A8. Market impact 三模型对比 (XAR-484, 喂 C3)
 
-**目标**: 实现 Almgren-Chriss / Kyle / Sqrt 三模型 + 历史回灌, 出 R^2 表 + 残差图.
+**[A | L1 | manual or event-on-fill-accumulation]** -- 不是 daily, 是 plant identification + adaptive recalibration trigger. 实盘 fill 数据积累到一定量 / drift 报警 / Curry 主动推, 才重跑.
+
+**目标**: 实现 Almgren-Chriss / Kyle / Sqrt 三模型 + 历史回灌, 出 R^2 表 + 残差图. **本质 = L1 controller synthesis evidence**, plant 辨识 (impact 模型) + 让 supervisory 选 controller 类型.
 
 **步骤**:
 1. `backend/app/research/methodology/market_impact.py`:
@@ -137,11 +168,15 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ---
 
-## B 桶 -- HUMAN+CODE (Curry 在场 + Claude/Codex 写)
+## B 桶 -- HUMAN+CODE sensor/actuator bridging
+
+Curry 当 missing sensor + actuator, 把 plant 状态喂给 controller (code) / 把 controller 输出写到 plant. Curry 不当 controller, 只当桥. **B 桶 trigger 都是 manual (一次性消耗 Curry 时间)**.
 
 ### B1. OKX live env loader + smoke (XAR-413)
 
-**为什么 B**: OKX live key 你已申请, 但贴进 `D:/keys/.env` 是你的物理动作 (FSC 不能碰 keys).
+**[B | L3 setup | manual one-shot]** -- OKX key 是 L3 controller 的认证 actuator 配置. 一次性贴 + smoke, 不重跑 (除非 key rotate, 那时 event-triggered).
+
+**为什么 B**: OKX live key 你已申请, 但贴进 `D:/keys/.env` 是你的物理动作 (FSC 没 actuator 写本机 keys 文件).
 
 **Curry 现场步骤**:
 1. 你登 OKX 后台拿 32-char key + base64 secret + passphrase
@@ -164,7 +199,9 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### B2. 钉钉/飞书 webhook 申请 (XAR-483)
 
-**为什么 B**: 申请 bot + 加群是你的物理动作, FSC 没你的钉钉/飞书账号.
+**[B | L1-L3 bridge setup | manual one-shot]** -- alert router 的物理 actuator (Curry 收 alert 的通道). 一次性配, 不重跑.
+
+**为什么 B**: 申请 bot + 加群是你的物理动作, FSC 没你的钉钉/飞书账号 (无可控 actuator 进入这些 closed-system).
 
 **Curry 现场步骤**: 注册 bot -> 加群 -> 拿 token + 加签 secret -> 落 .env:
 ```
@@ -178,7 +215,9 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 
 ### B3. TDX pywinauto 控件树标定 (XAR-414)
 
-**为什么 B**: TDX 必须本机有 logged-in TdxW.exe 实例 (manual login + 手输验证码), FSC 在远程 worktree 跑不了 pywinauto inspect.
+**[B | L3 sensor setup | manual one-shot per TDX version]** -- TDX 是 L3 plant 的 sensor (账户/持仓/委托). Curry 提供登录态, agent 抓控件树 = sensor calibration. 重跑 trigger = TDX 改版.
+
+**为什么 B**: TdxW.exe 登录态对 FSC 不可观 (无 sensor 接入此进程), 必须 Curry 当 missing sensor (登录 + 切 panel).
 
 **Curry 现场步骤**:
 1. 启 TdxW.exe + 登录券商账户
@@ -206,7 +245,9 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 
 ### B4. QMT / EasyXT / xtquant SDK probe (XAR-414)
 
-**为什么 B**: xtquant 是 QMT 安装目录的局部 import, 必须本机装好 QMT + mini-login (manual). FSC 没你的券商账户.
+**[B | L3 sensor setup | manual one-shot]** -- QMT 是 L3 plant 备路 sensor + actuator. 同 B3, Curry 提供登录态, agent probe SDK = sensor 字段对齐.
+
+**为什么 B**: xtquant 是 QMT 安装目录局部 import, 券商账户登录态对 FSC 不可观.
 
 **Curry 现场步骤**:
 1. 装 QMT 客户端 + mini-login 一次 (用券商账户)
@@ -234,7 +275,9 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 
 ### B5. 5080 hot standby 硬件 + state replication (XAR-483)
 
-**为什么 B**: 5080 上电 + netbird 入网 + BIOS 配置是物理动作.
+**[B | infra layer | manual one-shot setup + continuous rsync]** -- 物理硬件配置 = Curry 一次性, 之后 state replication 是 L3 continuous (rsync 5s). takeover trigger = event (5090 死) + manual ack.
+
+**为什么 B**: 5080 上电 + netbird 入网 + BIOS 是物理动作, FSC 无 actuator 进物理层.
 
 **Curry 现场步骤**:
 1. 5080 上电 + BIOS Wake-on-LAN 启
@@ -262,9 +305,13 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 
 ---
 
-## C 桶 -- Curry 拍板
+## C 桶 -- supervisory control (controller = Curry)
+
+Curry 当 controller 本体, 设 set-point. Code 无法替代. **C 桶 trigger 必须显式声明** (manual / event-on-drift / clock-review), 不默认 clock.
 
 ### C1. 停牌/涨跌停数据源选型
+
+**[C | L1 | manual one-shot + event-on-source-change]** -- 选 sensor 是 controller synthesis 决策. 一次定型, 数据源变化 (akshare 维护停 / 新增 vendor) 或半年 review 才重选.
 
 **前置**: A1 完成, 看 `docs/suspension-source-comparison.md`.
 
@@ -273,6 +320,8 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 **输出形式**: 你回 "用 akshare 主, baostock 二路, 盘中容忍 5min" 之类的一句话.
 
 ### C2. 风控阈值最终值
+
+**[C | L1 | manual + event-on-drift + quarterly review]** -- set-point 选择. Trigger: ① 实盘启动前 manual, ② drift detector 报警 event, ③ 季度 review clock. 不是 daily.
 
 **前置**: A7 完成, 看 `docs/risk-threshold-candidates.md`.
 
@@ -286,6 +335,8 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 
 ### C3. Market impact + drift 模型选型
 
+**[C | L1 | manual + event-on-fill-accumulation]** -- controller type selection. Trigger: ① 实盘启动前 manual, ② 实盘 fill 数据积累到 calibration window 时 event.
+
 **前置**: A8 完成 + 一个独立的 drift detection 三指标对比 (KL/PSI/Wasserstein, 任务可后开).
 
 **拍板**:
@@ -294,37 +345,82 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 
 ### C4. Process supervision 选型
 
+**[C | infra layer | manual one-shot]** -- infra controller type. 一次定型.
+
 **前置**: B5 中段.
 
 **拍板**: nssm vs WinSW vs Windows Service. Claude 给候选 + 维护成本对比, 你选.
 
 ---
 
-## 依赖图
+## Cascade set-point 流向 + trigger 启动顺序
+
+### Cascade (set-point 自上而下)
 
 ```
-B2(webhook) -> A6(alert) -> A5(heartbeat) -> A4(kill switch)
-B1(OKX key) -> A6 alert recipient                              # optional path
-B3(TDX) || B4(QMT) -> A2(state machine) -> A3(pretrade)
-A1(停牌源) -> C1(拍板) -> A3(pretrade finalize)
-A7(阈值候选) -> C2(拍板) -> A3/A4 finalize
-A8(impact) -> C3(拍板)
-B5(5080 hardware) -> 5080 standby code -> C4(supervisor 拍板)
+L0 战略 (Curry)               上钱 / 资金规模 / 风险预算
+   |
+   v set-point
+L1 supervisory (Curry, C 桶)  C1 数据源选 / C2 阈值 / C3 模型选型 / C4 supervisor
+   ^                          ^ evidence
+   | sensor calibration       |
+   |                          | sensitivity 报告
+L2 plant identification (A)   A1 停牌对照 / A7 阈值候选 / A8 impact 三模型
+   |                          
+   | controller params        
+   v                          
+L3 实时控制 (A)              A2 状态机(observer) / A3 pretrade / A4 kill switch / A5 heartbeat / A6 alert
+   ^                          ^ alert event 上行
+   | sensor input             |
+   |                          
+plant 物理层 (B 桶 bridge)    B1 OKX key / B2 webhook / B3 TDX / B4 QMT / B5 5080
 ```
 
-并行启动顺序:
+### Trigger 启动顺序 (按 trigger 类型, 不按 layer)
 
-**Now (并行)**:
-- A 桶: A1 + A2 + A7 + A8 全部启 (read-only / 纯代码 / backtest, 互不阻塞)
-- B 桶 (你启 session 拉我或 codex): B1 (贴 key + smoke) + B2 (申 webhook)
+**Manual one-shot (Curry 一次性消耗)**:
+- B1 OKX key 贴 .env (15min)
+- B2 钉钉/飞书 webhook 申请 (15-30min)
+- B3 TDX 登录 + 控件树标定 (30-60min, Curry 切 panel)
+- B4 QMT mini-login + SDK probe (30-60min)
+- B5 5080 上电 + netbird 入网 + UPS (1-2hr)
 
-**B1/B2 完成后**: A 桶启 A4 + A5 + A6 链
+**Manual or event triggered (FSC 主动跑 / 你推一下就跑)**:
+- A1 停牌源对照 (一次跑, 半年 review 重跑)
+- A7 风控阈值 backtest (上钱前一次, drift 报警时重跑, 季度 review)
+- A8 market impact 三模型 (上钱前一次, 实盘 fill 积累时重跑)
 
-**B3/B4 完成后**: A 桶启 A2 -> A3
+**Continuous (always-on, 配置完成即跑)**:
+- A2 状态机 (持久化 observer)
+- A3 pretrade (订单循环阻断)
+- A4 kill switch (三路触发 always-on)
+- A5 heartbeat (1s tick + 5s 检测)
+- A6 alert router (event-driven 上行)
+- B5 standby rsync (5s tick)
 
-**A1 + A7 + A8 完成后**: C1 + C2 + C3 三个拍板提交给 Curry
+**Supervisory decision (Curry 拍板, event-driven)**:
+- C1 数据源选 (A1 报告 ready 时)
+- C2 阈值最终值 (A7 报告 ready 时)
+- C3 impact + drift 选型 (A8 报告 ready 时)
+- C4 supervisor 选型 (B5 中段时)
 
-**最后**: B5 (5080) + A3/A4 finalize
+### 并行调度
+
+**Now (互不阻塞, 立刻启)**:
+- B1 + B2 (你 15min 解锁两条 actuator)
+- A1 + A2 + A7 + A8 (FSC 4 路独立跑)
+
+**B1 完成 -> A6 拿到 alert recipient (但 A6 也可后接, 不阻塞)**
+
+**B2 完成 -> A6 拿到 webhook -> 启 A5/A4/A6 链**
+
+**B3/B4 完成 -> 启 A2 wire 真 broker sensor -> 启 A3 pretrade**
+
+**A1/A7/A8 报告 ready -> C1/C2/C3 拍板**
+
+**C1/C2/C3 拍板 -> A3/A4 finalize 参数 + L3 全部 reload set-point**
+
+**B5 完成 -> 5080 接管演练 -> C4 拍板 supervisor 工具**
 
 ---
 
