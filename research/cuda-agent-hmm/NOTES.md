@@ -75,6 +75,22 @@ Two findings:
    (warm-start) = 1/8 active **every single refit** across all 3 tol values.
    Same pattern v2 hit. Cold-init each refit is the right path; v3's design holds.
 
+## OS policy (Curry 2026-05-20)
+
+Win-first, WSL2 fallback only when Windows native is blocked.
+
+| component | path |
+|---|---|
+| nvcc + CUDA C++ kernel | Windows native (MSVC + cu132) |
+| cudarc Rust bindings | Windows native |
+| pyo3 Python binding | Windows native (matches our uv venv) |
+| CUDA-Agent loop | Windows native first; WSL2 only if SKILL.md bash chokes |
+| Triton sm_120 verify | Windows native one-kernel probe; WSL2 fallback if fails |
+| dynamax comparison spike (if revived) | WSL2 only (JAX has no Windows GPU wheel) |
+
+Prod runtime (`expanding_fit_hmm_batched` consumers, regime.py, ingest,
+warehouse) stays Windows. WSL2 is dev-time only.
+
 ## Decision: kernel work justified
 
 Probe killed the easy lever. To beat 2.6s/refit we need different compute.
