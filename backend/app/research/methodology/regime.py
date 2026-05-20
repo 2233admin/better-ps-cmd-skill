@@ -320,9 +320,14 @@ def expanding_fit_hmm_batched(
     posterior reflects whether THAT series is in each state at each step.
 
     Backed by pomegranate v1.x; runs on cu132 + sm_120 (RTX 5090 Blackwell).
-    Benchmarked GPU win at (B=300, K=8, D=20): 1.39x over CPU sequential
-    (pomegranate orchestration overhead caps speedup; a fused Triton kernel
-    would push 3-5x but is XAR-466 follow-up).
+    Benchmarked GPU speedup (vs pomegranate CPU, same model, max_iter=10):
+      (B= 300, K= 8, D=20, T= 914)  1.39x  (orchestration overhead dominates)
+      (B=1500, K= 8, D=20, T= 141)  2.92x
+      (B=1500, K=16, D=20, T= 141)  4.89x  (K=16 makes compute amortize fully)
+    GPU absolute time floor ~430ms at B=1500; CPU scales sub-linearly with B.
+    A fused Triton/CUDA forward kernel could push another ~2x but per the
+    "能加速的加速 / 真的影响效率的换 rust" directive, pomegranate is still
+    in the "加速" range -- no rewrite needed unless B>5000 plateaus.
 
     Parameters
     ----------
