@@ -1,1 +1,4 @@
 *.sh text eol=lf
+DATA/**/*.duckdb filter=lfs diff=lfs merge=lfs -text
+DATA/**/*.parquet filter=lfs diff=lfs merge=lfs -text
+DATA/**/*.db filter=lfs diff=lfs merge=lfs -text
