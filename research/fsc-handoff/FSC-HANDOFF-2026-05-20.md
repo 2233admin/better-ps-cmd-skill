@@ -1,6 +1,12 @@
-# Pre-live blocker handoff (2026-05-20)
+# Pre-live blocker handoff (2026-05-20, v3)
 
-K-atana 距上钱的全部 blocker, 用 **cascade 控制系统** 视角设计 (方法论 `E:/knowledge/05-Engineering/exp-2026-05-20-abc-task-triage-for-agents.md`).
+K-atana 距上钱的全部 blocker, 用 **cascade 控制系统 + JCS 联合认知** 视角设计 (方法论 v3 见 `E:/knowledge/05-Engineering/exp-2026-05-20-abc-task-triage-for-agents.md`).
+
+## Framework disclaimer
+
+本框架 **借控制论结构 (cascade / supervisory), 不借 LTI 工具**. 任何"稳定性证明"/"频域裕度"/"adaptive control 保证" 在 agent+人+市场系统**都不成立**. 术语不等于工具.
+
+B 桶用 **JCS (Joint Cognitive Systems) "authority + ability to act"** 语言, 不用"observability/controllability 失效" (后者暗含 LTI).
 
 ## 两个正交维度
 
@@ -19,9 +25,9 @@ K-atana 距上钱的全部 blocker, 用 **cascade 控制系统** 视角设计 (�
 
 **Manual push 是合法 controller 设计**, 不是降级 fallback. L1/L2 不必"每日跑", 罕见/价值密集事件 manual trigger 更优.
 
-每项任务下方标 **[桶 | L层 | trigger]** 三元组.
+每项任务下方标 **[桶 | L层 | trigger]** 三元组. **Fast-path**: 满足 (L3 + A 桶 + event/clock) 三条 -> 打单一 tag `[L3-A-auto]` 跳过展开.
 
-依赖图 + cascade set-point 流向见末尾.
+依赖图 + cascade preference 流向见末尾.
 
 ---
 
@@ -47,9 +53,11 @@ K-atana 距上钱的全部 blocker, 用 **cascade 控制系统** 视角设计 (�
 
 ### A2. 订单状态机 + persistence (XAR-481)
 
-**[A | L3 | continuous]** -- 状态机本身是 L3 内环 plant 模型, 服务于 pretrade/kill switch 等 L3 controllers. 一次性写好不重跑.
+**[L3-A-auto]** -- 状态机 = L3 plant observer, 服务 pretrade/kill switch. 一次写不重跑.
 
-**目标**: 把 `backend/app/trading/adapters/{qmt,crypto,crypto_pipeline}/reconciliation.py` 三个纯函数模块包成正式状态机. **本质 = plant state observer**, 让 L3 多个 controller 共享统一观测.
+**FDI**: 状态卡非 terminal > N 秒 -> quarantine queue + alert. **Coupling**: 输出喂 A3/A4. **Latency**: SQLite WAL append < 10ms / op.
+
+**目标**: 把 `backend/app/trading/adapters/{qmt,crypto,crypto_pipeline}/reconciliation.py` 三个纯函数模块包成正式状态机.
 
 **状态图** (落 `docs/order-state-machine.md`):
 ```
@@ -72,9 +80,11 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A3. Pre-trade 风控评估器 (XAR-482)
 
-**[A | L3 | continuous]** -- 实时 disturbance rejection. set-point 从 C1 (数据源) + C2 (阈值) cascade 下来.
+**[L3-A-auto]** -- 实时 disturbance rejection. preference 从 C1 (数据源) + C2 (阈值) cascade 下来.
 
-**目标**: 订单循环里阻断 ST/停牌/涨跌停/北交所门槛/两融状态. **本质 = L3 控制器**, 干扰 (ST/停牌等) 出现时 reject 订单, 跟踪 "合规态" set-point.
+**FDI**: 5 条规则任一 raise 异常 -> fail-closed (reject 订单) + alert critical. **Coupling**: 依赖 A2 状态机 + C1/C2 拍板结果. **Latency**: 订单循环 < 100ms per check (5 条规则总和).
+
+**目标**: 订单循环里阻断 ST/停牌/涨跌停/北交所门槛/两融状态.
 
 **前置**: A1 完成 (知道用哪个数据源) + C1 拍板.
 
@@ -90,9 +100,11 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A4. Kill switch 三路触发 (XAR-482)
 
-**[A | L3 | continuous + event]** -- 三路 actuator: 文件 (manual override), heartbeat-event, 显式 API. reset 必须 manual (避免自动 spurious recovery).
+**[L3-A-auto]** + manual override 入口 -- 三路 actuator: 文件 (manual), heartbeat-event, 显式 API. reset 必须 manual.
 
-**目标**: 文件 / heartbeat / 显式 API 三路触发, <=5s 停所有新单 + 撤所有挂单. **本质 = L3 emergency actuator**, supervisory (Curry) 直接 manual override 入口.
+**FDI**: cancel-all 失败 -> alert critical 但不阻塞 trip 状态; 进程重启后 trip 状态从 SQLite 恢复. **Coupling**: 喂 A2 状态机 cancel 事件; 接 A5 heartbeat trigger. **Latency**: 端到端 trip -> cancel 已发起 < 5s.
+
+**目标**: 文件 / heartbeat / 显式 API 三路触发, <=5s 停所有新单 + 撤所有挂单.
 
 **前置**: A2 状态机已落.
 
@@ -104,9 +116,11 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ### A5. Heartbeat 四路 (XAR-483)
 
-**[A | L3 | continuous]** -- L3 sensor (liveness), 喂 L3 actuator (kill switch) + L1 alert router.
+**[L3-A-auto]** -- L3 sensor (liveness), 喂 A4 + A6.
 
-**目标**: 进程 / 交易桥 / 行情桥 / 风控 四路心跳, 掉线 -> alert + kill switch trip. **本质 = L3 liveness sensor**, 干扰 (进程死/网抖) 检出 -> 触发内环 disturbance rejection.
+**FDI**: 心跳本身死 (监控 task 挂) -> 外部 watchdog 进程超时 -> 兜底 trip. **Coupling**: 喂 A4 kill switch + A6 alert. **Latency**: 心跳 1s tick, 检测窗口 5s (margin = 5x, numba JIT 启动 grace 30s).
+
+**目标**: 进程 / 交易桥 / 行情桥 / 风控 四路心跳, 掉线 -> alert + kill switch trip.
 
 **前置**: A4 kill switch + A7 alert router (alert 可后挂).
 
@@ -168,9 +182,11 @@ cancel_pending -> {cancelled | filled}    # cancel race
 
 ---
 
-## B 桶 -- HUMAN+CODE sensor/actuator bridging
+## B 桶 -- JCS capability bridging (code 有 authority, 缺 ability to act/sense)
 
-Curry 当 missing sensor + actuator, 把 plant 状态喂给 controller (code) / 把 controller 输出写到 plant. Curry 不当 controller, 只当桥. **B 桶 trigger 都是 manual (一次性消耗 Curry 时间)**.
+JCS 语言: code 决策权 (authority) 在, 但缺执行/观测能力 (ability to act / sense). Curry 补 missing capability, 不当 controller. **B 桶 trigger 都是 manual one-shot**.
+
+**反模式 #7 警告**: B 桶最常见死法是 "人当 sensor 但无 alert" -- 必须显式定义 "FSC 等不到人 N 分钟 -> alert Curry 钉钉/飞书" 兜底, 否则 B 退化成开环.
 
 ### B1. OKX live env loader + smoke (XAR-413)
 
@@ -307,11 +323,11 @@ KATANA_FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/<uuid>
 
 ## C 桶 -- supervisory control (controller = Curry)
 
-Curry 当 controller 本体, 设 set-point. Code 无法替代. **C 桶 trigger 必须显式声明** (manual / event-on-drift / clock-review), 不默认 clock.
+Curry 当 controller 本体, 设 preference. Code 无法替代. **C 桶 trigger 必须显式声明** + **每项必须有 SLA (最晚拍板时间)**, 否则 cascade L1 卡死 (反模式 #8 supervisory bottleneck).
 
 ### C1. 停牌/涨跌停数据源选型
 
-**[C | L1 | manual one-shot + event-on-source-change]** -- 选 sensor 是 controller synthesis 决策. 一次定型, 数据源变化 (akshare 维护停 / 新增 vendor) 或半年 review 才重选.
+**[C | L1 | manual one-shot + event-on-source-change]** **SLA: A1 报告 ready 后 +24h 内拍板**, 否则 A3 finalize 卡死.
 
 **前置**: A1 完成, 看 `docs/suspension-source-comparison.md`.
 
@@ -321,7 +337,7 @@ Curry 当 controller 本体, 设 set-point. Code 无法替代. **C 桶 trigger �
 
 ### C2. 风控阈值最终值
 
-**[C | L1 | manual + event-on-drift + quarterly review]** -- set-point 选择. Trigger: ① 实盘启动前 manual, ② drift detector 报警 event, ③ 季度 review clock. 不是 daily.
+**[C | L1 | manual + event-on-drift + quarterly review]** **SLA: A7 报告 ready 后 +48h 内拍板** (上钱前). 之后 event-driven (drift) 或季度 review. 不是 daily.
 
 **前置**: A7 完成, 看 `docs/risk-threshold-candidates.md`.
 
@@ -335,7 +351,7 @@ Curry 当 controller 本体, 设 set-point. Code 无法替代. **C 桶 trigger �
 
 ### C3. Market impact + drift 模型选型
 
-**[C | L1 | manual + event-on-fill-accumulation]** -- controller type selection. Trigger: ① 实盘启动前 manual, ② 实盘 fill 数据积累到 calibration window 时 event.
+**[C | L1 | manual + event-on-fill-accumulation]** **SLA: A8 报告 ready 后 +1 周内拍板** (不阻塞上钱, 但实盘首月必须有指标在跑).
 
 **前置**: A8 完成 + 一个独立的 drift detection 三指标对比 (KL/PSI/Wasserstein, 任务可后开).
 
@@ -345,7 +361,7 @@ Curry 当 controller 本体, 设 set-point. Code 无法替代. **C 桶 trigger �
 
 ### C4. Process supervision 选型
 
-**[C | infra layer | manual one-shot]** -- infra controller type. 一次定型.
+**[C | infra layer | manual one-shot]** **SLA: B5 中段 (Claude 给候选对比后) +24h 内拍板**.
 
 **前置**: B5 中段.
 
@@ -427,9 +443,21 @@ plant 物理层 (B 桶 bridge)    B1 OKX key / B2 webhook / B3 TDX / B4 QMT / B5
 ## 最终验收门 (上钱前)
 
 - [ ] A 桶 8 项全过自己的验收契约
-- [ ] B 桶 5 项全部 Curry-in-loop 完成
-- [ ] C 桶 4 项 Curry 拍板落 doc
+- [ ] B 桶 5 项全部 Curry-in-loop 完成 (含 alert 兜底验证)
+- [ ] C 桶 4 项 Curry 在 SLA 内拍板落 doc
 - [ ] paper 1 周跑通: alert / heartbeat / kill switch / pretrade 全部 wired 且触发过
+- [ ] FDI / coupling / latency 检查项每个 [L3-A-auto] 任务都有具体数字
 - [ ] 5080 hot standby 切换演练通过 1 次
 - [ ] gitleaks 验证零 key 泄漏
 - [ ] Curry 最终 ack "可以上钱"
+
+## v3 changelog (2026-05-20, codex critique applied)
+
+- 加 framework disclaimer (借结构, 不借 LTI 工具)
+- B 桶语言: JCS "authority + ability to act" 取代 "observability/controllability 失效"
+- 删 adaptive control 词汇 (避假 stability proof)
+- Fast-path `[L3-A-auto]` 简化 L3+A+auto 任务 (A2/A3/A4/A5)
+- 每个 L3-A 任务补 FDI / Coupling / Latency 三行
+- C 桶每项加 **SLA (最晚拍板时间)** -- 反模式 #8 处方
+- B 桶 header 警告反模式 #7 (人当 sensor 无 alert)
+- preference 取代 set-point 语言 (多目标漂移)
