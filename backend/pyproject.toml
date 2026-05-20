@@ -31,6 +31,8 @@ dependencies = [
     "hmmlearn>=0.3.3",
     "numba>=0.65.1",
     "pomegranate>=1.1.2",
+    "akshare>=1.18.63",
+    "baostock>=0.9.1",
 ]
 
 [dependency-groups]
