@@ -10,7 +10,7 @@ from .dsr_pbo import (
     deflated_sharpe_ratio,
     dsr_filter,
 )
-from .regime import expanding_fit_hmm
+from .regime import expanding_fit_hmm, expanding_fit_hmm_batched
 
 __all__ = [
     "deflated_sharpe_ratio",
@@ -18,4 +18,5 @@ __all__ = [
     "benjamini_hochberg",
     "dsr_filter",
     "expanding_fit_hmm",
+    "expanding_fit_hmm_batched",
 ]

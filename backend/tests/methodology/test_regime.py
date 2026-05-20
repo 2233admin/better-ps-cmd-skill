@@ -12,7 +12,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from app.research.methodology.regime import expanding_fit_hmm
+from app.research.methodology.regime import expanding_fit_hmm, expanding_fit_hmm_batched
 
 
 def _synthetic_regime_returns(seed: int = 0) -> pl.DataFrame:
@@ -104,3 +104,60 @@ def test_warmup_enforced():
     df = _synthetic_regime_returns()
     with pytest.raises(ValueError, match="need >="):
         expanding_fit_hmm(df.head(50), min_train=120)
+
+
+# ---------- Batched (multi-symbol) cross-section HMM ----------
+
+
+def _synthetic_batched_panel(B: int = 6, T: int = 300, D: int = 3, seed: int = 0):
+    """Random panel of B series, T steps, D features for batched smoke."""
+    rng = np.random.default_rng(seed)
+    out = np.empty((B, T, D), dtype=np.float32)
+    bull_n = (2 * T) // 3
+    bear_n = T - bull_n
+    for b in range(B):
+        bull = rng.normal(0.001, 0.01, (bull_n, D))
+        bear = rng.normal(-0.002, 0.015, (bear_n, D))
+        out[b] = np.concatenate([bull, bear]).astype(np.float32)
+    return out
+
+
+def test_batched_output_schema_cpu():
+    panel = _synthetic_batched_panel(B=4, T=250, D=2)
+    probs = expanding_fit_hmm_batched(
+        panel, n_states=3, min_train=120, refit_every=30, device="cpu", max_iter=5
+    )
+    assert probs.shape == (4, 250, 3)
+    assert np.isnan(probs[:, :120, :]).all(), "warmup must be NaN"
+    assert not np.isnan(probs[:, 120:, :]).any(), "post-warmup must be clean"
+
+
+def test_batched_probs_sum_to_one_cpu():
+    panel = _synthetic_batched_panel(B=4, T=250, D=2)
+    probs = expanding_fit_hmm_batched(
+        panel, n_states=3, min_train=120, refit_every=30, device="cpu", max_iter=5
+    )
+    sums = probs[:, 120:, :].sum(axis=-1)
+    assert np.allclose(sums, 1.0, atol=1e-4)
+
+
+def test_batched_warmup_enforced():
+    panel = _synthetic_batched_panel(B=2, T=50, D=2)
+    with pytest.raises(ValueError, match="need >="):
+        expanding_fit_hmm_batched(panel, min_train=120, device="cpu")
+
+
+def test_batched_gpu_smoke_if_available():
+    """Skip if no CUDA; smoke that GPU path runs and matches CPU shape."""
+    try:
+        import torch
+    except ImportError:
+        pytest.skip("torch not available")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    panel = _synthetic_batched_panel(B=4, T=250, D=2)
+    probs = expanding_fit_hmm_batched(
+        panel, n_states=3, min_train=120, refit_every=30, device="cuda", max_iter=5
+    )
+    assert probs.shape == (4, 250, 3)
+    assert not np.isnan(probs[:, 120:, :]).any()
