@@ -365,22 +365,40 @@ Experiment C — 财务数据偏差（fundamentals PIT-safe 后）
 
 **文献依据**：Daniel et al. (2008) — 美国基准偏差使 Sharpe 上浮 8%/年。
 
-### 缺口5：另类数据 — 零接入路径，价格数据独大
+### 缺口5：另类数据 — akshare 适配器严重不完整
 
-**核心发现**：k-atana 是以 OHLCV 为核心的价格数据终端，国内头部接入 2-3 种另类数据，k-atana 完全缺失。
+**核心发现**：akshare 有 1095 个函数，akshare_feed.py 只实现了 **8 个（0.7%）**。不是"零接入"，是"接了一点但远没接完"。
 
-| 数据类别 | 国内头部 | k-atana |
-|---------|---------|---------|
-| 卫星/物流（G7/停车场）| 幻方/明汯传闻 | ❌ |
-| 消费 POS（银联/美团）| 大型机构 | ❌ |
-| 供应链/物流 | 传闻在用 | ❌ |
-| 分析师预期修订 | Wind/朝阳永续 | ❌ |
-| 融资余额 | 中证登 | ❌ |
-| 期货 COT | 九坤传闻 | ❌ |
-| 社交情绪/新闻 | FinBERT 在研 | ❌ |
-| 加密 funding/OI 历史 | — | ❌ 仅定义，未实现 |
+| 数据类别 | akshare 函数 | akshare_feed.py | 状态 |
+|---------|------------|----------------|------|
+| **个股历史行情** | `stock_zh_a_hist` 等 24 个 | ✅ `get_stock_history()` | 已实现 |
+| **可转债** | `bond_cb_jsl` 等 45 个 | ✅ `get_bond_*()` | 已实现 |
+| **北向资金** | `stock_hsgt_*` 等多个 | ✅ `get_north_flow()` | 已实现 |
+| **板块资金流** | `stock_sector_fund_flow_rank` 等 | ✅ `get_sector_flow()` | 已实现 |
+| **龙虎榜** | `stock_lhb_detail_em` | ✅ `get_dragon_tiger()` | 已实现 |
+| **融资融券** | `stock_margin_*` 等 7 个 | ❌ | **完全缺失** |
+| **涨跌停池** | `stock_zt_pool_*` 等 6 个 | ❌ | **完全缺失** — XAR-480 用的是 baostock |
+| **个股资金流** | `stock_individual_fund_flow` 等 13 个 | ❌ | **完全缺失** |
+| **分析师排名** | `stock_analyst_rank_em` | ❌ | **缺失** |
+| **宏观数据** | `macro_*` 共 226 个 | ❌ | **完全缺失** |
+| **财务报表** | `stock_financial_*` 等 39 个 | ❌ | **缺失** — F10 财务数据 |
+| **板块/行业** | `stock_board_*` 等 33 个 | ❌ | **缺失** |
+| **期货数据** | `futures_*` 等 66 个 | ✅ `FuturesFeed` | 已实现（via futures_feed.py）|
+| **加密行情** | `crypto_*` | ✅ `okx_feed.py` | 已实现 |
+| **加密 funding/OI** | `crypto_*` | ❌ | **仅定义，未实现** |
 
-**PIT lake 架构本身 solid**：可扩展，新增数据集只需在 `pit/` 下新建 contract。缺口是上游——无接入桥。
+**融资余额现状**：DuckDB 有 172 行（2025-2026），但不是从 akshare_feed.py 进——是另一个 ingest 路径，适配器方法 `get_margin_balance()` 未写。
+
+**真正的 gap**：不是"没有接入桥"，而是 `backend/app/markets/ashare/akshare_feed.py` 只开发了 0.7%。接入路径存在，适配器方法没写完。
+
+**立即可做**（按论文相关性排序）：
+
+1. `get_margin_balance()` — 融资余额，信贷脉冲论文需要（已有 172 行数据源）
+2. `get_micro_capital_flow()` — 个股资金流（`stock_individual_fund_flow_rank`）
+3. `macro_*` 宏函数接入 DuckDB — 社融/CPI/PMI/BDI 直接从 akshare 拉，不用中间层
+4. `stock_zt_pool_*` — 涨跌停池（XAR-480 已用 baostock，但 akshare 有实时接口）
+
+**架构优势**：PIT lake + DuckDB + manifest 系统都是现成的，每新增一个 akshare 函数只需写一个适配器方法 + DuckDB 表定义。
 
 ---
 
@@ -401,13 +419,13 @@ P1（提升论文贡献强度）
 P2（差异化贡献）
   [3] 多信号 OR gate（MA200 + breadth + margin + vol regime）
   [3] Zhang et al. Coupled HMM 方向
-  [5] 融资余额数据接入
-  [5] 加密 funding/OI 数据实现
+  [5] akshare_feed.py 补全：融资余额 + 个股资金流 + macro_* 宏函数
+  [5] 加密 funding/OI 数据实现（crypto PIT lake 已定义，函数未写）
 
 P3（架构级）
   [1] 延迟插桩（p50/p95/p99）+ C++ 热路径
   [2] IC/IM 期货对冲设计
-  [5] 卫星/物流另类数据评估
+  [5] 卫星/物流另类数据评估（高端，不影响论文）
 ```
 
 **三条最硬阻断**（无论文可信度）：
@@ -419,6 +437,8 @@ P3（架构级）
 1. PIT-correct MS-VAR for A-share（方法论改进）
 2. Multivariate HMM + 涨跌停密度的 A 股 regime 检测
 3. OFI + T+1 微观-宏观双层信号框架
+
+**gap 5 修正**：不是"零接入"，是 akshare 1095 函数只用了 8 个（0.7%）。融资余额/个股资金流/macro_* 均缺失。P2 优先级：补全 akshare_feed.py。
 
 ---
 
