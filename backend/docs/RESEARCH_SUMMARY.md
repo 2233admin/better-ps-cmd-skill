@@ -293,22 +293,132 @@ XAR-423/426 进行中（ccxt 替换 + PIT 回填）。
 
 ---
 
-## 7. 当前优先级建议
+## 7. 五条深度缺口（2026-05-21）
+
+> 竞品调研 + 执行基础设施 + A股微观结构 + Regime检测 + PIT vs Naive 实验
+
+### 缺口1：执行基础设施 — 150-450ms，差行业30-100倍
+
+**核心发现**：无实测延迟数据（零 `time_ns()` 插桩）。估算：QMT 路径 ~150-450ms，OKX 路径 ~155-405ms。XAR-481 dry_run 在5处未移除，真实订单从未发出。
+
+| 层级 | 延迟 | 技术 | k-atana |
+|------|------|------|---------|
+| 机构零售 (mini-HFT) | 5-50ms | C++/FPGA/co-lo | ❌ 未达到 |
+| 对冲基金 (Prop) | 0.1-5ms | C++/kernel bypass | ❌ |
+| HFT (Jane Street) | <100μs | FPGA/微波 | ❌ |
+
+**补齐路径**：直接 DMA（替换 EasyXT）+ 共置（深交所期货大厦）+ C++ 热路径 + 连接池 + 延迟插桩。
+
+### 缺口2：A股微观结构约束 — 12项缺口，回测本质是假的
+
+**核心发现**：`tradability_status_pit.parquet` 不在 lake 中；ASHARE_DATA_PIT_SPEC.md 明确要求建模的约束全部未实现。
+
+| 缺口 | 严重性 |
+|------|--------|
+| **T+1 卖出约束未建模** | 高 |
+| **涨跌停执行约束未建模** | 高 — `tradability_status_pit` 不存在 |
+| **停牌/ST 状态未建模** | 高 |
+| 融资暴增反转数据不足（172行）| 高 |
+| SOE confounder 未控制 | 中 |
+| 涨跌停密度未纳入 HMM | 中 |
+| **OFI 涨跌停日处理缺失** | 高 |
+| 指数期货对冲未设计 | 中 |
+| 因子半衰期未分析 | 中 |
+| 社融数据 available_at 时滞 | 高 — 社融 T+14 发布 vs 隐含 T 日使用 |
+
+**立即可做**：回测标签加"research-only"；HMM 加入涨跌停密度特征；OFI 实现加涨跌停过滤。
+
+### 缺口3：Regime 检测 — 慢熊 fail，多信号 OR gate 未实现
+
+**核心发现**：单变量 HMM 在 2018/2021-22 慢熊上 fail；MV1 改善但 2018 仍无解。国内头部用多信号 OR gate（MA200 + breadth + margin + macro），k-atana 未实现。
+
+| 方法 | 国内头部 | k-atana |
+|------|---------|---------|
+| 多信号 OR 门 | ✅ 主流 | ❌ 未实现 |
+| 融资余额变化率 | ✅ A股特色 | ❌ |
+| 政策 regime overlay | ✅ A股特色 | ❌ |
+| XGBoost/LightGBM 分类器 | ✅ 头部在用 | ❌ |
+| Zhang et al. Coupled HMM（新闻+跨股）| 学术方向 | ❌ |
+| MS-VAR (Hamilton) | 学术标准 | 计划 Path B |
+
+**学术引用**：Zhang et al. (2018) arXiv:1809.00306；Liu et al. (2021) arXiv:2104.09700；Hamilton (1989)。
+
+### 缺口4：PIT vs Naive IC 对比 — 核心贡献无量化证据
+
+**核心发现**：PIT 契约是设计原则，不是证据。没有跑过 PIT vs naive 对比实验，不知道现有因子的 IC 膨胀了多少。
+
+**实验设计（3个子实验）**：
 
 ```
-P0（底座未通，论文方向无意义）
-  XAR-426 — ccxt 替换 + crypto PIT
-  XAR-414 — TDX account reader 连通
-  XAR-408/409 — PIT 数据完整性
+Experiment A — HS300 成分股成员偏差
+  Naive: 期末成员 → PIT: 期初成员
+  预期 IC 膨胀: 0.02-0.05
 
-P1（底座接近完成，开始论文相关实验）
-  XAR-467 Phase 2 — 全状态激活 benchmark，确立 GPU HMM 可用性
-  XAR-465 — Multivariate HMM 实验设计
+Experiment B — 复权因子偏差
+  预期 IC 膨胀: 取决于调整质量
 
-P2（等 P1 结果，有 hypothesis 再做文献综述）
-  论文文献综述（POMONA / HMM / A-share microstructure）
-  Thesis statement formulation
+Experiment C — 财务数据偏差（fundamentals PIT-safe 后）
+  预期 IC 膨胀: 0.05-0.15（A 股 4 个月报告滞后期）
 ```
+
+**关键缺失**：沪深 300 历史成分股（含 effective_date 和 removal_date）——来自 Wind/Bloomberg。k-atana 独特优势：manifest 系统提供不可篡改的执行记录。
+
+**文献依据**：Daniel et al. (2008) — 美国基准偏差使 Sharpe 上浮 8%/年。
+
+### 缺口5：另类数据 — 零接入路径，价格数据独大
+
+**核心发现**：k-atana 是以 OHLCV 为核心的价格数据终端，国内头部接入 2-3 种另类数据，k-atana 完全缺失。
+
+| 数据类别 | 国内头部 | k-atana |
+|---------|---------|---------|
+| 卫星/物流（G7/停车场）| 幻方/明汯传闻 | ❌ |
+| 消费 POS（银联/美团）| 大型机构 | ❌ |
+| 供应链/物流 | 传闻在用 | ❌ |
+| 分析师预期修订 | Wind/朝阳永续 | ❌ |
+| 融资余额 | 中证登 | ❌ |
+| 期货 COT | 九坤传闻 | ❌ |
+| 社交情绪/新闻 | FinBERT 在研 | ❌ |
+| 加密 funding/OI 历史 | — | ❌ 仅定义，未实现 |
+
+**PIT lake 架构本身 solid**：可扩展，新增数据集只需在 `pit/` 下新建 contract。缺口是上游——无接入桥。
+
+---
+
+## 8. 修订后的优先级建议
+
+```
+P0（阻断论文可信度 — 3项硬缺口）
+  [2] 涨跌停/停牌数据接入 baostock（research-only → constraint-aware）
+  [1] XAR-481 dry_run 移除（真实订单可执行）
+  [4] HS300 成分股历史获取（Experiment A 前提）
+
+P1（提升论文贡献强度）
+  [3] MV1 → MS-VAR Path B（解决慢熊检测）
+  [2] T+1 仓位追踪实现
+  [2] OFI 涨跌停过滤逻辑
+  [4] PIT vs Naive Experiment A 代码实现
+
+P2（差异化贡献）
+  [3] 多信号 OR gate（MA200 + breadth + margin + vol regime）
+  [3] Zhang et al. Coupled HMM 方向
+  [5] 融资余额数据接入
+  [5] 加密 funding/OI 数据实现
+
+P3（架构级）
+  [1] 延迟插桩（p50/p95/p99）+ C++ 热路径
+  [2] IC/IM 期货对冲设计
+  [5] 卫星/物流另类数据评估
+```
+
+**三条最硬阻断**（无论文可信度）：
+1. 涨跌停/停牌数据缺失 → 回测结果为假
+2. HS300 成分股历史缺失 → PIT vs Naive 实验跑不起来
+3. 执行层 150-450ms → 论文方向只能 paper trade
+
+**三条差异化贡献**（论文价值所在）：
+1. PIT-correct MS-VAR for A-share（方法论改进）
+2. Multivariate HMM + 涨跌停密度的 A 股 regime 检测
+3. OFI + T+1 微观-宏观双层信号框架
 
 ---
 
