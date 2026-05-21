@@ -1,0 +1,29 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "backend",
+  "projectType": "application",
+  "sourceRoot": "backend/app",
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run pytest",
+        "cwd": "backend"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run ruff check app tests",
+        "cwd": "backend"
+      }
+    },
+    "state-machine-test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run pytest tests/trading/test_state_machine.py -v",
+        "cwd": "backend"
+      }
+    }
+  }
+}

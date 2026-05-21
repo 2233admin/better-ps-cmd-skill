@@ -1,0 +1,9 @@
+{
+  "name": "k-atana",
+  "version": "0.0.0",
+  "private": true,
+  "description": "k-atana workspace root -- only exists to host nx for cross-toolchain task wrapping. Real backend deps live in backend/pyproject.toml (uv). Real frontend deps live in frontend/package.json (npm).",
+  "devDependencies": {
+    "nx": "^20.8.0"
+  }
+}

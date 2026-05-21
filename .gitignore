@@ -42,6 +42,9 @@ katana-control-plane-smoke-lake/
 frontend/.next/
 frontend/out/
 frontend/node_modules/
+node_modules/
+.nx/cache/
+.nx/workspace-data/
 frontend/.turbo/
 
 # Build artifacts
