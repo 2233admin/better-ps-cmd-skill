@@ -192,6 +192,208 @@ ICT结构分析              ← 微观验证: 价格位置+资金结构
 人脑决策                 ← 最终拍板: 无形资产+特殊情况 (Cao 2024: 人在此优于AI)
 ```
 
+## 5条深度缺口分析（2026-05-21）
+
+> 竞品调研 + 执行基础设施 + A股微观结构 + Regime检测 + PIT vs Naive 实验设计
+
+---
+
+### 缺口1：执行基础设施（延迟 profile）
+
+**现状**：150-450ms，属于"高延迟零售量化"层级。
+
+| 层级 | 延迟目标 | 技术 | k-atana |
+|------|---------|------|---------|
+| 人类手动 | 1-10s | 键盘下单 | — |
+| 零售算法 | ~100ms | Python REST | — |
+| **机构零售 (mini-HFT)** | **5-50ms** | C++/FPGA/co-lo | ❌ 未达到 |
+| 对冲基金 (Prop) | 0.1-5ms | C++/kernel bypass | ❌ |
+| HFT (Jane Street) | <100μs | FPGA/微波 | ❌ |
+| 交易所 co-lo (Citadel) | <10μs | FPGA+微波+定制硬件 | ❌ |
+
+**到机构零售层级的差距：30-100倍**。核心障碍：
+
+- `urlopen` 同步 HTTP，无异步无连接池
+- EasyXT 是外部 Windows 进程，IPC 开销固有
+- ccxt 通用层对 OKX 路径增加额外翻译开销
+- 无共置、无 kernel bypass、无 FPGA
+- XAR-481 dry_run 仍在5处未移除（真实订单从未发出）
+
+**补齐路径**：直接 DMA（替换 EasyXT）+ 共置（深交所期货大厦）+ C++ 热路径重写 + 连接池 + 延迟插桩（p50/p95/p99）。
+
+**文献依据**：Daniel et al. (2008) — 基准偏差使 Sharpe 上浮 8%/年；执行延迟每增加 10ms，HFT 策略夏普比下降约 0.1。
+
+---
+
+### 缺口2：A股微观结构约束未建模（12项缺口）
+
+当前回测本质上是**"假设所有股票每日都可自由交易"**。ASHARE_DATA_PIT_SPEC.md 明确要求建模以下约束，但均未实现：
+
+| 缺口 | 类型 | 严重性 |
+|------|------|--------|
+| T+1 卖出约束未建模 | 回测模型 | **高** — 频繁翻转时策略无法执行 |
+| 涨跌停执行约束未建模 | 回测模型 | **高** — `tradability_status_pit.parquet` 不在 lake 中 |
+| 停牌/ST 状态未建模 | 回测模型 | **高** — baostock 有数据但未接入 |
+| 融资暴增反转数据不足 | 数据 | **高** — 仅 172 行（2025-2026），无法统计推断 |
+| SOE confounder 未控制 | 研究设计 | 中 — 信贷脉冲中混入 SOE 政策效应 |
+| 涨跌停密度未纳入 HMM | 特征工程 | 中 — 涨跌停数量是 A 股独特 regime 指标 |
+| OFI 涨跌停日处理缺失 | 信号逻辑 | **高** — OFI 在涨跌停日完全失效 |
+| 指数期货对冲未设计 | 策略设计 | 中 — 融券不可用但 IC/IM 期货对冲未建模 |
+| 因子半衰期未分析 | 因子评价 | 中 — 无因子衰减速度分析 |
+| 最小成交金额/手数 | 执行模型 | 低 |
+| 滑点随流动性变化 | 执行模型 | 中 |
+| 社融数据 available_at 时滞 | PIT 违规 | 高 — 社融 T+14 发布 vs 隐含 T 日使用 |
+
+**立即可做（无需新数据）**：
+
+1. 回测标签加注"research-only" + 注明 T+1 和涨跌停约束未建模
+2. 融资反转因子从"13 因子"移出（数据不足）
+3. HMM 加入涨跌停密度特征（辅助检测极端 bear regime，可能解决慢熊漏检）
+4. OFI 实现中明确加入涨跌停过滤：`if limit_up or limit_down: skip_OFI_signal()`
+
+**中期（需数据接入）**：
+
+5. 接入 baostock 历史停牌/涨跌停数据
+6. 实现 T+1 仓位追踪
+7. SOE 持仓比例因子
+
+---
+
+### 缺口3：Regime 检测方法差距
+
+**现状**：单变量 Gaussian HMM 在慢熊（2018/2021-22）上 fail，MV1 多元扩展已改善但 2018 仍无解。
+
+**国内头部实际做法**（从公开信息和社区模式推断）：
+
+| 方法 | 国内头部 | k-atana |
+|------|---------|---------|
+| 多信号 OR 门（MA200 + breadth + margin + macro）| ✅ 主流做法 | ❌ 未实现 |
+| 波动率百分位 regime 门 | ✅ 通用 | ❌ 未纳入 HMM |
+| 融资余额变化率 | ✅ A 股特色 | ❌ 未实现 |
+| 政策 regime overlay | ✅ A 股特色 | ❌ 未实现 |
+| XGBoost/LightGBM 分类器 | ✅ 头部在用 | ❌ 未实现 |
+| Zhang et al. Coupled HMM（新闻+跨股关联）| 学术方向 | ❌ 未实现 |
+| MS-VAR/Hamilton 框架 | 学术标准 | 计划（Path B）|
+
+**学术文献**（可引用）：
+
+- Zhang et al. (2018) arXiv:1809.00306 — "Extended Coupled HMM over Multi-Sourced Data"，A 股 2016，融合新闻事件+跨股相关
+- Liu et al. (2021) arXiv:2104.09700 — "Stock Market Trend Analysis Using HMM and LSTM"，XGBoost-HMM 优于纯 GMM-HMM
+- Hamilton (1989) — Markov switching VAR，学术标准
+
+**论文差异化机会**：PIT-correct MS-VAR for A-share，将是方法论上对国内学术界 naive 回测的显式改进。
+
+---
+
+### 缺口4：PIT vs Naive IC 对比实验设计
+
+**核心问题**：k-atana 有 PIT 数据基础设施，但**从未量化** naive 回测的 IC 膨胀幅度。没有这个数字，PIT 契约只是设计原则，不是证据。
+
+**文献基础**：
+
+| 论文 | 核心发现 | 适用性 |
+|------|---------|--------|
+| Daniel et al. (2008) arXiv:0810.1922 | 基准成员前视使 Sharpe 上浮**高达 8%/年** | 美国大蓝筹，A 股类似机制 |
+| Glasserman & Lin (2023) arXiv:2309.17322 | GPT 情绪分析前视偏差量化 | LLM 因子相关 |
+| Benhenda (2026) arXiv:2601.13770 | Look-Ahead-Bench，PIT-LLM vs 标准 LLM | 2026 前沿基准 |
+| Blanchet et al. (2022) arXiv:2202.00871 | PIT 填补的最优偏差-方差权衡 | 理论框架 |
+
+**实验设计（3个子实验）**：
+
+```
+Experiment A — HS300 成员偏差（momentum_resid_vol）
+  Naive arm:  用期末成员计算 IC
+  PIT arm:    用期初成员计算 IC
+  预期 IC 膨胀: 0.02-0.05
+
+Experiment B — 复权因子偏差（所有因子）
+  Naive arm:  最新 parquet 中的 unadjusted close
+  PIT arm:    available_at 约束下的 adjustment_factor 复权
+  预期 IC 膨胀: 取决于调整质量
+
+Experiment C — 财务数据偏差（quality_roe / value_pb，待做）
+  Naive arm:  用最新报告的 EPS，忽略披露滞后
+  PIT arm:    只用 available_at 之后的 EPS
+  预期 IC 膨胀: 0.05-0.15（A 股 4 个月报告滞后期）
+```
+
+**关键缺失数据**：沪深 300 历史成分股（含 effective_date 和 removal_date）——这是 Experiment A 的唯一前提条件。来源：Wind/Bloomberg/Windquant。
+
+**k-atana 独特优势**：manifest 系统（`manifest.py` + `snapshot.py` + `ExperimentManifest`）提供不可篡改的执行记录——哪个数据快照、哪个 git commit、所有参数。可直接回应对"PIT vs naive 结果不可复现"的批评。
+
+**论文贡献**：首个在 A 股上做受控 PIT vs naive IC 对比实验的系统性研究。
+
+---
+
+### 缺口5：另类数据来源
+
+**k-atana 当前数据栈**：以 OHLCV 价格数据为核心的交换行情数据，加上 TDX 财务快照和宏观指标 stub。**完全缺失**的结构化另类数据类别：
+
+| 数据类别 | 国内头部实践 | k-atana |
+|---------|------------|---------|
+| 卫星图像/物流 | 幻方/明汯传闻用停车场/港口/工业活动 | ❌ |
+| 消费 POS/信用卡 | 银联数据；美团/饿了么订单代理 | ❌ |
+| 供应链/物流 | G7 卡车 GPS；煤炭/钢铁/零售流 | ❌ |
+| 分析师预期/修订 | Wind IPE、朝阳永续、Bloomberg 一致预期 | ❌ |
+| 资金流/融资余额 | 中证登融资余额；空头利率；NEEQ 流 | ❌ |
+| 期货持仓报告 (COT) | CZCE/DCE 周度 COT | ❌ |
+| 社交情绪/新闻 | 东财、雪球、新浪；FinBERT/ChatGLM | ❌ |
+| 宏观指标 | 央行/NBS：FAI/CPI/PPI/PMI/社融 | 部分（67K 行 CPI/PPI/农业价格） |
+| 财务报告 (PIT-safe) | 季报/年报；披露日期 | 路线图中（XAR-453） |
+| 区块交易/大宗 | 上交所/深交所大宗交易 | ❌ |
+| 期权/衍生品 | 持仓量/put-call 比/隐含波动率 | ❌ |
+
+**PIT lake 架构本身是 solid 的**：可扩展到任何新的另类数据——只需在 `pit/` 目录下新增 dataset contract（如 `ashare.margin_balance_pit`）。缺口是**上游**：没有非价格数据的接入桥——无 ChinaData/Tushare 用于 margin/fund-flow，无物流 API，无情绪爬虫。
+
+**加密货币侧同样缺失**：crypto PIT lake 定义了 `crypto.funding_rate_pit`、`crypto.open_interest_pit`、`crypto.mark_price_pit`，但实际行数为 0。OKX-dump (21 installs/day) 和 python-okx (3,074/day) 已审计但未实现。
+
+---
+
+### 综合优先级
+
+```
+P0（阻断论文可信度）
+  [2] 涨跌停/停牌数据接入 baostock（将 research-only 升级为 constraint-aware）
+  [1] XAR-481 dry_run 移除（真实订单可执行）
+  [4] HS300 成分股历史获取（Experiment A 前提条件）
+
+P1（提升论文贡献强度）
+  [3] MV1 HMM → MS-VAR Path B（解决慢熊检测）
+  [2] T+1 仓位追踪实现
+  [2] OFI 涨跌停过滤逻辑
+  [4] PIT vs Naive Experiment A 代码实现
+
+P2（差异化贡献）
+  [3] 多信号 OR gate（MA200 + breadth + margin + vol regime）
+  [3] Zhang et al. Coupled HMM 方向（新闻+跨股）
+  [5] 融资余额数据接入
+  [5] 加密货币 funding/OI 数据实现
+
+P3（架构级）
+  [5] 卫星/物流另类数据评估
+  [1] 延迟插桩（p50/p95/p99）
+  [1] C++ 热路径重写
+  [2] IC/IM 期货对冲设计
+```
+
+---
+
+### 关键结论
+
+**三条最硬的 gap（阻断论文发表的）**：
+
+1. **涨跌停/停牌数据缺失** → 回测结果是假的，所有因子 IC 都有潜在膨胀
+2. **HS300 成分股历史缺失** → PIT vs Naive 对比实验跑不起来，核心贡献无法量化
+3. **执行层 150-450ms** → 论文方向"paper trading"无法迁移到真实执行，limiting case 是手动交易
+
+**三条差异化贡献（论文价值所在）**：
+
+1. **PIT-correct MS-VAR for A-share** — 方法论对国内学术界的 naive 回测显式改进，附 HS300 成员偏差 IC 膨胀实测数据
+2. **Multivariate HMM + 涨跌停密度的 A 股 regime 检测** — 学术上引用 Zhang et al.，实践上比国内头部 OR gate 更严格
+3. **OFI 涨跌停过滤 + T+1 仓位追踪** — 国内首个考虑 A 股微观结构约束的微观-宏观双层信号框架
+
+---
+
 > "AI trained on corporate disclosures surpasses most human analysts in return prediction.
 > Humans outperform AI when intangible assets or financial distress are involved."
 > — Cao et al. 2024, Journal of Financial Economics
