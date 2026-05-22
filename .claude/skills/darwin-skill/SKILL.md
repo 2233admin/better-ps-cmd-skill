@@ -162,6 +162,15 @@ for each skill:
 ### Phase 1: 基线评估（Baseline）
 
 ```
+# Step 0: 实测环境检查（在打分之前）
+if 子agent工具（Task/Agent）可用:
+  eval_mode = "full_test"
+  proceed to full scoring with subagent execution
+else:
+  eval_mode = "dry_run"
+  proceed with dry-run verification
+  # 注：dry_run 不跳过评分，仍按维度1-7静态+维度8模拟执行路径打分
+
 for each skill in 优化范围:
 
   # 结构评分（主agent可以做）
@@ -235,6 +244,13 @@ for each skill:
     # Step 6: 日志
     results.tsv 追加行
 
+    # === 每轮间的轻量 checkpoint ===
+    if 新总分 > 旧总分:
+      展示：「Round {N} keep，分数 {旧}→{新}，继续？」
+      用户确认后继续下一轮
+    else:
+      break  # revert 已在上一步处理
+
   # === 每个skill优化完后的人类检查点 ===
   展示该skill的改动摘要：
     - git diff（改前 vs 改后）
@@ -246,7 +262,13 @@ for each skill:
 
 ### Phase 2.5: 探索性重写（可选）
 
-当 hill-climbing 连续2个skill都在 round 1 就 break（涨不动）时，提议一次「探索性重写」：
+当以下任一条件满足时，提议探索性重写：
+
+| 触发条件 | 说明 |
+|---|---|
+| 连续 2 个 skill 在 round 1 就 break | hill-climbing 局部最优，流程已到瓶颈 |
+| 单个 skill MAX_ROUNDS 触顶仍无改进 | 渐进式改动无法突破，可考虑重构 |
+| skill 评分卡显示多个维度同时低迷 | 结构性问题，重写比逐维修复更高效 |
 
 ```
 1. 选一个瓶颈skill
