@@ -323,6 +323,14 @@ for each skill:
 2. [skill-B] 重组了workflow结构，baseline对比优势增大
 ```
 
+**量化打分**（可选，使用 scripts/skill_metrics.py）：
+```bash
+PYTHONIOENCODING=utf-8 python .claude/skills/darwin-skill/scripts/skill_metrics.py \
+  --results results.tsv --skill <skill-name> [--json out.json]
+```
+输出：夏普比率、索提诺比率、卡玛比率、最大回撤、胜率、综合评分、评级。
+`eval_mode=full_test` 时自动调用。
+
 ---
 
 ## results.tsv 格式
@@ -490,6 +498,7 @@ timestamp	commit	skill	old_score	new_score	status	dimension	note	eval_mode
 
 | 路径 | 用途 |
 |---|---|
+| `scripts/skill_metrics.py` | 量化打分脚本（夏普比率、最大回撤、胜率等） |
 | upstream: `templates/result-card.html` | 3风格主模板（swiss/terminal/newspaper，hash切换） |
 | upstream: `templates/result-card-dark.html` / `-white.html` | 单一风格替代模板 |
 | upstream: `scripts/screenshot.mjs` | 2x 高清截图脚本 |
