@@ -2,3 +2,4 @@ timestamp	commit	skill	old_score	new_score	status	dimension	note	eval_mode
 2026-05-22T20:02:26Z	9866d2f	darwin-skill	82	88	keep	D3+D5+D6	dry-run触发精确化+D5评分示例+上游资源标注	dry_run
 2026-05-22T20:07:21Z	3e313b5	darwin-skill	88	92	keep	D4+D8	Phase0环境检查+每轮checkpoint+2.5精确触发条件	dry_run
 2026-05-22T20:12:30Z	1daaaaec	darwin-skill	92	94	keep	D5+D3	Phase2四字段模板+异常表参考命令列	dry_run
+2026-05-23T03:58:00Z	auto-optimize	autoresearch	66	70	keep	D4	Added checkpoints at each workflow step	dry_run
