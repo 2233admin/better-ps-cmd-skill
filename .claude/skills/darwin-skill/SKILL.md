@@ -220,9 +220,23 @@ for each skill:
 
     # Step 2: 提出改进方案
     针对最低维度，生成1个具体改进方案：
-      - 改什么（具体段落/行）
-      - 为什么改（对应rubric哪条）
-      - 预期提升多少分
+
+    每次改进必须包含以下4个字段，缺一不可：
+    - **改什么**：「第 N-M 行」「「XXX」改为「YYY」」
+    - **为什么改**：对应 rubric 维度编号 + 问题描述
+    - **预期提升**：具体分数范围（如「+2~3分」）和验收标准
+    - **影响评估**：本次改动是否可能牵连其他维度
+
+    **方案模板示例**：
+    ```
+    ## Round {N} 改进方案
+    - 改什么：L64-73，新增 dry_run 触发条件表格（4行）
+    - 为什么改：D3 边界条件，rubric 评分 7/10，缺口是「触发时机无精确界定」
+    - 预期提升：+2 分（7→9），验收标准：新分严格 > 旧分
+    - 影响评估：不影响其他维度
+    ```
+
+    方案必须等用户确认后才执行。
 
     # Step 3: 执行改进
     编辑 SKILL.md
@@ -362,18 +376,18 @@ timestamp	commit	skill	old_score	new_score	status	dimension	note	eval_mode
 
 流程假设环境理想，但实操常遇异常。以下预定义 fallback，保证优化过程不会「一跑就卡住」。
 
-| 场景 | 触发条件 | 处理动作 |
-|---|---|---|
-| 不在 git 仓库 | `git rev-parse` 失败 | 提示用户「建议 git init」；若拒绝，用 `cp SKILL.md SKILL.md.bak.YYYYMMDD-HHMM` 文件备份代替 revert |
-| results.tsv 缺失 | 文件不存在 | 新建并写表头行（9列：含 eval_mode） |
-| results.tsv 损坏 | 列数不匹配 / 非TSV | 备份为 `.bak.YYYYMMDD-HHMM` 后重建，告知用户 |
-| 分支已存在 | `git checkout -b` 失败 | 分支名末尾加 `-2` / `-3`；第3次失败则切回现有分支并询问继续还是新起 |
-| `git revert` 失败 | 冲突 / 工作树脏 | 先 `git stash`，重试；仍失败则从上一个 commit 的 SKILL.md 读出覆盖当前文件手动恢复 |
-| MAX_ROUNDS 触顶（默认3） | 已跑3轮仍有短板 | 不强制 break，展示当前最弱维度问用户「继续加1轮 / 进入Phase 2.5 / 收工」 |
-| 优化后超 150% 体积 | 新文件 > 原 × 1.5 | 拒绝提交，回到改进步骤精简（删冗余/合并重复），再评 |
-| test-prompts.json 已存在 | 文件已在 skill 目录 | 默认复用并展示，问用户「复用 / 重写 / 追加」三选一 |
-| SKILL.md 找不到 | 目录存在但无 SKILL.md | 该 skill 终止，results.tsv 记 `status=error`，继续下一个 |
-| 分数计算规则 | 浮点精度漂移 | 总分保留 1 位小数，改进需严格 > 旧分（不靠四舍五入） |
+| 场景 | 触发条件 | 参考命令 | 处理动作 |
+|---|---|---|---|
+| 不在 git 仓库 | `git rev-parse --is-inside-work-tree` 返回非0 | `git init`（或提示用户） | 提示用户「建议 git init」；若拒绝，用 `cp SKILL.md SKILL.md.bak.YYYYMMDD-HHMM` 文件备份代替 revert |
+| results.tsv 缺失 | `test -f results.tsv` 返回非0 | `touch results.tsv` | 新建并写表头行：timestamp·commit·skill·old_score·new_score·status·dimension·note·eval_mode |
+| results.tsv 损坏 | 列数 ≠ 9 或含非TSV字符 | `awk -F'\t' '{print NF; exit}' results.tsv` | 备份为 `.bak.YYYYMMDD-HHMM` 后重建，告知用户 |
+| 分支已存在 | `git checkout -b` 失败（exit code ≠ 0） | `git branch -a \| grep {branch}` | 分支名末尾加 `-2` / `-3`；第3次失败则切回现有分支并询问继续还是新起 |
+| `git revert` 失败 | `git revert HEAD` 冲突或工作树脏 | `git status` | 先 `git stash`，重试；仍失败则 `git show HEAD:SKILL.md > SKILL.md` 覆盖恢复 |
+| MAX_ROUNDS 触顶（默认3） | 已跑3轮仍有短板且新分 ≤ 旧分 | — | 不强制 break，展示当前最弱维度问用户「继续加1轮 / 进入Phase 2.5 / 收工」 |
+| 优化后超 150% 体积 | `wc -c SKILL.md` 新 > 原 × 1.5 | `stat --format=%s` | 拒绝提交，回到改进步骤精简（删冗余/合并重复），再评 |
+| test-prompts.json 已存在 | `test -f {skill}/test-prompts.json` | — | 默认复用并展示，问用户「复用 / 重写 / 追加」三选一 |
+| SKILL.md 找不到 | `test -f {skill}/SKILL.md` 返回非0 | `ls {skill}/` | 该 skill 终止，results.tsv 记 `status=error`，继续下一个 |
+| 分数计算规则 | 浮点精度漂移导致边界值误判 | — | 总分保留 1 位小数，改进需严格 > 旧分（不靠四舍五入） |
 
 **原则**：异常先告知用户，再按规则处理；绝不静默跳过或静默失败。
 
