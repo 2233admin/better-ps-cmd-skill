@@ -34,25 +34,25 @@ class SkillMetrics:
     keeps: int
     reverts: int
 
-    # === 类比 vectorbt.portfolio 的核心指标 ===
+    # === 收益类指标 (类比 vectorbt.portfolio returns) ===
     total_return: float       # 总收益率 (new_final / old_baseline - 1)
     momentum: float           # 动量（最后一轮 vs 第一轮）
     volatility: float        # 波动率（每轮变化的标准差）
 
-    # === 类比 quantstats 返回分析 ===
-    sharpe_ratio: float      # 夏普比率（分数提升的效率）
-    sortino_ratio: float    # 索提诺比率（只惩罚负收益）
-    calmar_ratio: float     # 卡玛比率（收益/最大回撤）
-    max_drawdown: float     # 最大回撤
-    max_drawdown_duration: int  # 最大回撤持续轮数
+    # === 风险调整指标 (类比 quantstats) ===
+    optimization_efficiency: float  # 优化效率（类比夏普比率）
+    downside_protection: float     # 防御效率（类比索提诺比率）
+    marginal_gain: float            # 边际收益（类比卡玛比率）
+    regression_depth: float        # 回退幅度（类比最大回撤）
+    regression_duration: int        # 回退持续轮数
 
-    # === 类比 returns 分析 ===
-    win_rate: float          # 胜率（keep 比例）
-    avg_improvement: float  # 平均每轮提升
-    consistency: float       # 一致性（正向轮次 / 总轮次）
-    avg_round_score: float  # 平均轮次得分
-    best_round: int         # 最佳轮次
-    worst_round: int        # 最差轮次
+    # === 质量指标 ===
+    retention_rate: float          # 留存率（类比胜率 keep / total）
+    avg_improvement: float        # 平均每轮提升
+    consistency: float             # 一致性（正向轮次 / 总轮次）
+    avg_round_score: float         # 平均轮次得分
+    best_round: int               # 最佳轮次
+    worst_round: int              # 最差轮次
 
     # === 综合评分 ===
     overall_score: float     # 综合评分（0-100）
@@ -111,21 +111,20 @@ def calc_metrics(skill_name: str, rows: list[dict]) -> SkillMetrics:
     # 波动率
     volatility = statistics.stdev(returns) if len(returns) > 1 else 0.0
 
-    # 夏普比率
+    # 优化效率（类比夏普比率）
     mean_ret = statistics.mean(returns) if returns else 0.0
-    sharpe = (mean_ret / volatility) if volatility > 1e-9 else 0.0
+    optimization_efficiency = (mean_ret / volatility) if volatility > 1e-9 else 0.0
 
-    # 索提诺比率（只惩罚负收益）
+    # 防御效率（类比索提诺比率）
     neg_returns = [r for r in returns if r < 0]
     downside = statistics.stdev(neg_returns) if len(neg_returns) > 1 else 0.0
-    sortino = (mean_ret / downside) if downside > 1e-9 else 0.0
+    downside_protection = (mean_ret / downside) if downside > 1e-9 else 0.0
 
-    # 最大回撤
+    # 回退幅度
     peak = rounds[0].old_score
-    max_dd = 0.0
-    max_dd_dur = 0
+    regression_depth = 0.0
+    regression_duration = 0
     current_dd_dur = 0
-    dd_start = 0
 
     for r in rounds:
         if r.new_score >= peak:
@@ -134,23 +133,22 @@ def calc_metrics(skill_name: str, rows: list[dict]) -> SkillMetrics:
         else:
             dd = (peak - r.new_score) / peak
             current_dd_dur += 1
-            if dd > max_dd:
-                max_dd = dd
-                max_dd_dur = current_dd_dur
-                dd_start = r.round_num
+            if dd > regression_depth:
+                regression_depth = dd
+                regression_duration = current_dd_dur
 
-    # 卡玛比率
-    calmar = (total_return / max_dd) if max_dd > 1e-9 else 0.0
+    # 边际收益（类比卡玛比率）
+    marginal_gain = (total_return / regression_depth) if regression_depth > 1e-9 else 0.0
 
-    # 胜率
-    win_rate = keeps / n if n > 0 else 0.0
+    # 留存率
+    retention_rate = keeps / n if n > 0 else 0.0
 
     # 平均每轮提升
     improvements = [r.skill_return for r in rounds if r.is_improvement]
     avg_improvement = statistics.mean(improvements) if improvements else 0.0
 
     # 一致性（正向占比）
-    consistency = win_rate
+    consistency = retention_rate
 
     # 平均轮次得分
     avg_round_score = statistics.mean(scores)
@@ -161,7 +159,7 @@ def calc_metrics(skill_name: str, rows: list[dict]) -> SkillMetrics:
 
     # 综合评分
     overall_score = _calc_overall_score(
-        total_return, sharpe, win_rate, consistency, max_dd
+        total_return, optimization_efficiency, retention_rate, consistency, regression_depth
     )
 
     # 评级
@@ -175,12 +173,12 @@ def calc_metrics(skill_name: str, rows: list[dict]) -> SkillMetrics:
         total_return=total_return,
         momentum=momentum,
         volatility=volatility,
-        sharpe_ratio=sharpe,
-        sortino_ratio=sortino,
-        calmar_ratio=calmar,
-        max_drawdown=max_dd,
-        max_drawdown_duration=max_dd_dur,
-        win_rate=win_rate,
+        optimization_efficiency=optimization_efficiency,
+        downside_protection=downside_protection,
+        marginal_gain=marginal_gain,
+        regression_depth=regression_depth,
+        regression_duration=regression_duration,
+        retention_rate=retention_rate,
         avg_improvement=avg_improvement,
         consistency=consistency,
         avg_round_score=avg_round_score,
@@ -193,38 +191,27 @@ def calc_metrics(skill_name: str, rows: list[dict]) -> SkillMetrics:
 
 def _calc_overall_score(
     total_return: float,
-    sharpe: float,
-    win_rate: float,
+    optimization_efficiency: float,
+    retention_rate: float,
     consistency: float,
-    max_dd: float,
+    regression_depth: float,
 ) -> float:
-    """综合评分（类比策略总收益评分）"""
-    # 权重分配
-    RET_W = 0.30      # 总收益
-    SHARPE_W = 0.25  # 夏普
-    WIN_W = 0.20      # 胜率
+    """综合评分"""
+    RET_W = 0.30      # 总收益率
+    EFF_W = 0.25      # 优化效率
+    RETAIN_W = 0.20   # 留存率
     CONS_W = 0.15     # 一致性
-    DD_W = 0.10       # 回撤控制
+    DD_W = 0.10       # 回退控制
 
-    # 收益分：按比例映射到 0-100
     ret_score = min(total_return * 100, 100) if total_return > 0 else 0.0
-
-    # 夏普分：>1 优秀，>2 卓越
-    sharpe_score = min(sharpe * 50, 100)
-
-    # 胜率分：直接百分比
-    win_score = win_rate * 100
-
-    # 一致性分
+    eff_score = min(optimization_efficiency * 50, 100)
+    retain_score = retention_rate * 100
     cons_score = consistency * 100
-
-    # 回撤分：0%回撤=100分，>20%=0分
-    dd_score = max(0, (0.20 - max_dd) / 0.20 * 100) if max_dd < 0.20 else 0.0
-
+    dd_score = max(0, (0.20 - regression_depth) / 0.20 * 100) if regression_depth < 0.20 else 0.0
     return (
         ret_score * RET_W +
-        sharpe_score * SHARPE_W +
-        win_score * WIN_W +
+        eff_score * EFF_W +
+        retain_score * RETAIN_W +
         cons_score * CONS_W +
         dd_score * DD_W
     )
@@ -247,15 +234,15 @@ def format_metrics(m: SkillMetrics) -> str:
 ║  综合评分: {m.overall_score:.1f}/100  评级: {m.grade:<6}           ║
 ╠══════════════════════════════════════════════════════╣
 ║  轮次统计                                              ║
-║    总轮次: {m.total_rounds:<3}  保留: {m.keeps:<3}  回滚: {m.reverts:<3}  胜率: {m.win_rate:.0%}          ║
+║    总轮次: {m.total_rounds:<3}  保留: {m.keeps:<3}  回滚: {m.reverts:<3}  留存率: {m.retention_rate:.0%}          ║
 ╠══════════════════════════════════════════════════════╣
-║  收益类指标 (类比 portfolio returns)                ║
+║  收益类指标 (类比 vectorbt.portfolio returns)     ║
 ║    总收益率:  {m.total_return:+.2%}  动量: {m.momentum:+.2%}              ║
 ║    波动率:    {m.volatility:.4f}  平均提升: {m.avg_improvement:+.4f}      ║
 ╠══════════════════════════════════════════════════════╣
 ║  风险调整指标 (类比 quantstats)                     ║
-║    夏普比率:  {m.sharpe_ratio:+.2f}  索提诺: {m.sortino_ratio:+.2f}        ║
-║    卡玛比率:  {m.calmar_ratio:+.2f}  最大回撤: {m.max_drawdown:.2%}         ║
+║    优化效率:  {m.optimization_efficiency:+.2f}  防御效率: {m.downside_protection:+.2f}        ║
+║    边际收益:  {m.marginal_gain:+.2f}  回退幅度: {m.regression_depth:.2%}         ║
 ╠══════════════════════════════════════════════════════╣
 ║  质量指标                                              ║
 ║    一致性:    {m.consistency:.0%}  平均分: {m.avg_round_score:.1f}               ║
@@ -273,15 +260,16 @@ def export_json(m: SkillMetrics, path: str):
         "total_rounds": m.total_rounds,
         "keeps": m.keeps,
         "reverts": m.reverts,
-        "win_rate": round(m.win_rate, 4),
+        "win_rate": round(m.retention_rate, 4),
         "total_return": round(m.total_return, 6),
         "momentum": round(m.momentum, 6),
         "volatility": round(m.volatility, 6),
-        "sharpe_ratio": round(m.sharpe_ratio, 4),
-        "sortino_ratio": round(m.sortino_ratio, 4),
-        "calmar_ratio": round(m.calmar_ratio, 4),
-        "max_drawdown": round(m.max_drawdown, 6),
-        "max_drawdown_duration": m.max_drawdown_duration,
+        "retention_rate": round(m.retention_rate, 4),
+        "optimization_efficiency": round(m.optimization_efficiency, 4),
+        "downside_protection": round(m.downside_protection, 4),
+        "marginal_gain": round(m.marginal_gain, 4),
+        "regression_depth": round(m.regression_depth, 6),
+        "regression_duration": m.regression_duration,
         "consistency": round(m.consistency, 4),
         "avg_improvement": round(m.avg_improvement, 6),
         "avg_round_score": round(m.avg_round_score, 2),
@@ -320,14 +308,14 @@ def main():
 
     # 优化建议
     suggestions = []
-    if m.win_rate < args.threshold:
-        suggestions.append(f"⚠ 胜率 {m.win_rate:.0%} < 阈值 {args.threshold:.0%}，改进方向可能有问题")
-    if m.max_drawdown > 0.15:
-        suggestions.append(f"⚠ 最大回撤 {m.max_drawdown:.1%} 偏大，考虑更保守的改动策略")
-    if m.sharpe_ratio < 0.5:
-        suggestions.append(f"⚠ 夏普比率 {m.sharpe_ratio:.2f} 偏低，每轮提升效率不足")
+    if m.retention_rate < args.threshold:
+        suggestions.append(f"[WARN] retention_rate {m.retention_rate:.0%} < threshold {args.threshold:.0%}")
+    if m.regression_depth > 0.15:
+        suggestions.append(f"[WARN] regression_depth {m.regression_depth:.1%} is large, consider more conservative changes")
+    if m.optimization_efficiency < 0.5:
+        suggestions.append(f"[WARN] optimization_efficiency {m.optimization_efficiency:.2f} is low")
     if m.volatility > 0.10:
-        suggestions.append(f"⚠ 波动率 {m.volatility:.2%} 较高，轮次间分数变化不稳")
+        suggestions.append(f"[WARN] volatility {m.volatility:.2%} is high, scores are unstable across rounds")
 
     if suggestions:
         print("\n[OPTIMIZE] Suggestions:")
