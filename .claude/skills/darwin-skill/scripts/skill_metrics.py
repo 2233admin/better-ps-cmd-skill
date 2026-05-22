@@ -225,42 +225,85 @@ def _score_to_grade(score: float) -> str:
     return 'F'
 
 
-def format_metrics(m: SkillMetrics) -> str:
-    """格式化输出"""
+def adjust_score(rubric_score: float, m: SkillMetrics) -> float:
+    """基于量化指标调整 rubric 分数
+
+    量化指标作为调整因子：
+    - optimization_efficiency > 1.0 → +1~3分
+    - retention_rate < 100% → -1~5分
+    - regression_depth > 5% → -1~3分
+    - volatility > 5% → -1分（分数不稳定）
+    """
+    adjustment = 0.0
+    reasons = []
+
+    # 优化效率奖励
+    if m.optimization_efficiency > 2.0:
+        adjustment += 3
+        reasons.append(f"opt_eff={m.optimization_efficiency:.2f}+3")
+    elif m.optimization_efficiency > 1.0:
+        adjustment += 1
+        reasons.append(f"opt_eff={m.optimization_efficiency:.2f}+1")
+
+    # 留存率惩罚
+    if m.retention_rate < 1.0:
+        penalty = int((1 - m.retention_rate) * 5)
+        adjustment -= penalty
+        reasons.append(f"retention={m.retention_rate:.0%}-{penalty}")
+
+    # 回退惩罚
+    if m.regression_depth > 0.10:
+        adjustment -= 3
+        reasons.append(f"regression={m.regression_depth:.1%}-3")
+    elif m.regression_depth > 0.05:
+        adjustment -= 1
+        reasons.append(f"regression={m.regression_depth:.1%}-1")
+
+    # 波动惩罚
+    if m.volatility > 0.10:
+        adjustment -= 1
+        reasons.append(f"vol={m.volatility:.1%}-1")
+
+    adjusted = max(0, min(100, rubric_score + adjustment))
+    return adjusted, adjustment, reasons
+
+
+def format_combined(
+    skill_name: str,
+    rubric_score: float,
+    m: SkillMetrics
+) -> str:
+    """完整双评分输出"""
+    adjusted, adjustment, reasons = adjust_score(rubric_score, m)
+    combined_grade = _score_to_grade(adjusted)
+    reason_str = ", ".join(reasons) if reasons else "no adjustment"
+    arrow = "+" if adjustment >= 0 else ""
+
     return f"""
 ╔══════════════════════════════════════════════════════╗
-║  darwin-skill 量化评分报告: {m.skill_name:<28}║
+║  darwin-skill 评分报告: {skill_name:<28}║
 ╠══════════════════════════════════════════════════════╣
-║  综合评分: {m.overall_score:.1f}/100  评级: {m.grade:<6}           ║
+║  8维度评分:  {rubric_score:.1f}/100  (rubric sum)          ║
+║  量化调整:  {arrow}{adjustment:.1f}  ({reason_str})            ║
+║  综合评分:  {adjusted:.1f}/100                              ║
+║  评级:      {combined_grade:<6}   ({m.retention_rate:.0%} retention)       ║
 ╠══════════════════════════════════════════════════════╣
-║  轮次统计                                              ║
-║    总轮次: {m.total_rounds:<3}  保留: {m.keeps:<3}  回滚: {m.reverts:<3}  留存率: {m.retention_rate:.0%}          ║
-╠══════════════════════════════════════════════════════╣
-║  收益类指标 (类比 vectorbt.portfolio returns)     ║
-║    总收益率:  {m.total_return:+.2%}  动量: {m.momentum:+.2%}              ║
-║    波动率:    {m.volatility:.4f}  平均提升: {m.avg_improvement:+.4f}      ║
-╠══════════════════════════════════════════════════════╣
-║  风险调整指标 (类比 quantstats)                     ║
-║    优化效率:  {m.optimization_efficiency:+.2f}  防御效率: {m.downside_protection:+.2f}        ║
-║    边际收益:  {m.marginal_gain:+.2f}  回退幅度: {m.regression_depth:.2%}         ║
-╠══════════════════════════════════════════════════════╣
-║  质量指标                                              ║
-║    一致性:    {m.consistency:.0%}  平均分: {m.avg_round_score:.1f}               ║
-║    最佳轮:    #{m.best_round}  最差轮: #{m.worst_round}                      ║
+║  量化指标                                                ║
+║    优化效率: {m.optimization_efficiency:+.2f}  边际收益: {m.marginal_gain:+.2f}         ║
+║    回退幅度: {m.regression_depth:.2%}  波动率: {m.volatility:.4f}           ║
+║    留存率: {m.retention_rate:.0%}  总收益率: {m.total_return:+.2%}             ║
 ╚══════════════════════════════════════════════════════╝
 """
 
 
-def export_json(m: SkillMetrics, path: str):
+def export_json(m: SkillMetrics, path: str, rubric_score: Optional[float] = None):
     """导出 JSON 供后续使用"""
     data = {
         "skill": m.skill_name,
-        "overall_score": round(m.overall_score, 1),
         "grade": m.grade,
         "total_rounds": m.total_rounds,
         "keeps": m.keeps,
         "reverts": m.reverts,
-        "win_rate": round(m.retention_rate, 4),
         "total_return": round(m.total_return, 6),
         "momentum": round(m.momentum, 6),
         "volatility": round(m.volatility, 6),
@@ -276,6 +319,12 @@ def export_json(m: SkillMetrics, path: str):
         "best_round": m.best_round,
         "worst_round": m.worst_round,
     }
+    if rubric_score is not None:
+        adjusted, adjustment, reasons = adjust_score(rubric_score, m)
+        data["rubric_score"] = rubric_score
+        data["quant_adjustment"] = adjustment
+        data["adjustment_reasons"] = reasons
+        data["combined_score"] = round(adjusted, 1)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -289,11 +338,13 @@ def main():
     parser.add_argument('--skill', '-s',
                         default='darwin-skill',
                         help='目标 skill 名')
+    parser.add_argument('--rubric-score', '-R', type=float,
+                        help='8维度 rubric 分数（0-100），用于量化调整')
     parser.add_argument('--json', '-j',
                         help='导出 JSON 路径')
     parser.add_argument('--threshold', '-t',
                         type=float, default=0.5,
-                        help='胜率阈值 (默认 0.5)')
+                        help='留存率阈值 (默认 0.5)')
     args = parser.parse_args()
 
     tsv_path = Path(args.results).expanduser()
@@ -304,7 +355,14 @@ def main():
     rows = parse_tsv(str(tsv_path))
     m = calc_metrics(args.skill, rows)
 
-    print(format_metrics(m))
+    if args.rubric_score is not None:
+        # 8维度 + 量化 合并评分
+        print(format_combined(args.skill, args.rubric_score, m))
+    else:
+        # 仅量化指标
+        adjusted, adj, reasons = adjust_score(100, m)
+        print(f"[INFO] No rubric score provided. Quant-only mode.")
+        print(f"[INFO] Quant adjusted score: {adjusted:.1f}/100 | reasons: {', '.join(reasons) or 'none'}")
 
     # 优化建议
     suggestions = []
@@ -325,11 +383,15 @@ def main():
         print("\n[PASS] All metrics within healthy range")
 
     if args.json:
-        export_json(m, args.json)
-        print(f"\n✓ JSON 导出: {args.json}")
+        export_json(m, args.json, rubric_score=args.rubric_score)
+        print(f"\n[OK] JSON exported: {args.json}")
 
     # 退出码：综合评分
-    sys.exit(0 if m.overall_score >= 60 else 1)
+    if args.rubric_score is not None:
+        combined, _, _ = adjust_score(args.rubric_score, m)
+        sys.exit(0 if combined >= 60 else 1)
+    else:
+        sys.exit(0)
 
 
 if __name__ == '__main__':
