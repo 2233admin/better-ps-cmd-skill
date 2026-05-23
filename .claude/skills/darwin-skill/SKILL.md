@@ -151,11 +151,28 @@ for each skill:
      - 最典型的使用场景（happy path）
      - 一个稍复杂或有歧义的场景
   3. 保存到 skill目录/test-prompts.json：
+     ```json
      [
-       {"id": 1, "prompt": "用户会说的话", "expected": "期望输出的简短描述"},
-       {"id": 2, "prompt": "...", "expected": "..."}
+       {
+         "id": 1,
+         "prompt": "用户会说的话（中文）",
+         "prompt_en": "English equivalent prompt",
+         "expected": "期望输出的简短描述",
+         "type": "happy_path | edge_case | regression"
+       },
+       {
+         "id": 2,
+         "prompt": "...",
+         "expected": "..."
+       }
      ]
-```
+     ```
+
+**字段说明**:
+- `prompt`: 必须用用户会说的原话，越真实越好
+- `prompt_en`: 英文版本（可选，方便跨语言测试）
+- `expected`: 2-3句话描述期望行为，不是精确输出
+- `type`: happy_path=典型场景，edge_case=边界情况，regression=回归测试
 
 展示所有测试prompt给用户，**确认后再进入评估**。测试prompt的质量决定了优化方向是否正确。
 
