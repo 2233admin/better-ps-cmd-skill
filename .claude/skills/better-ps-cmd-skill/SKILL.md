@@ -15,6 +15,17 @@ For Windows-side work launched from WSL, run the `bash.exe` that belongs to Git 
 
 Use native WSL bash for Linux-only tasks. For generated Windows scripts, prefer native cmd/PowerShell and do not introduce Git Bash unless the user explicitly requires a developer-only script.
 
+## Quick Decision Tree
+
+```
+用户在 WSL 里要跑 Windows 命令？
+├── 是 → 用 Git Bash bash.exe
+│   ├── 路径 /mnt/c/... → 转换为 /c/...
+│   ├── 路径含空格 → 内层命令加单引号
+│   └── 目标 Windows 工具 → 放 -lc '' 内
+└── 否（纯 Linux 工具）→ 用原生 WSL bash
+```
+
 ## Decision Flow
 
 1. If the command targets a repo or file under `/mnt/drive-letter/...` and should use Windows-installed tools, run it through Git for Windows `bash.exe -lc`.
@@ -24,6 +35,8 @@ Use native WSL bash for Linux-only tasks. For generated Windows scripts, prefer 
 5. If Git for Windows `bash.exe` is unavailable or cannot be verified for temporary Codex command execution, stop and tell the user to expose/fix Git for Windows Bash. Do not auto-search installation paths, prepend PATH, introduce a wrapper, use `git-bash.exe`, or fall back to running `git`/`gh` in PowerShell/cmd.
 
 ## Git Bash Command Pattern
+
+> **参数说明**：`-lc` = login shell (`-l`) + execute command (`-c`)；`/c/` = Git Bash 驱动路径格式（不是 `/mnt/c/`，不是 `C:\`）
 
 Use Git Bash drive paths inside the `-lc` command:
 
@@ -93,6 +106,7 @@ If a script needs external tooling, use tools that the script checks for explici
 | 多层嵌套引号 | `-lc` 内层已有引号 | 用双引号包 `-lc`，单引号包内层命令 |
 | Git Bash 不可用 | 探针返回非 MINGW/MSYS | 按 Failure Handling 规则 fail-fast |
 | WSL 无 `/mnt/` 挂载 | `df /mnt/c` 失败 | 告知用户检查 WSL 安装状态 |
+| CRLF 文件在 Git Bash 执行 | Windows .bat 含 `\r\n` | Git Bash 报语法错误；执行前用 `sed -i 's/\r$//' file.bat` 或 `unix2dos -a` 转换 |
 
 ## Failure Handling
 
